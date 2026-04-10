@@ -516,11 +516,21 @@ function buildCellPreviewEl(item, id) {
 
   const img = document.createElement("img");
   img.className = "cell-preview cell-preview--thumb";
-  img.src = blessingImageSrc(item, id);
   img.alt = "";
   img.loading = "lazy";
   img.decoding = "async";
-  bindImageContentFallback(img, id);
+
+  const realSrc = blessingImageSrc(item, id);
+  if (isMobileGridBatching()) {
+    /** 先占位，真实 src 由 IntersectionObserver 在进入可视区域后再设，避免 1000 路同时解码撑爆内存 */
+    img.dataset.deferSrc = realSrc;
+    img.dataset.blessingCellId = id;
+    img.src = GRID_PLACEHOLDER_IMAGE;
+    img.classList.add("cell-preview--defer");
+  } else {
+    img.src = realSrc;
+    bindImageContentFallback(img, id);
+  }
 
   wrap.appendChild(img);
   return wrap;
@@ -537,12 +547,98 @@ function isMobileGridBatching() {
   return false;
 }
 
+/** 格子缩略图延迟加载（仅移动端）：与 renderGrid 生命周期一致，重绘前 disconnect */
+let mosaicThumbIo = null;
+let mosaicIoNudgeTimer = null;
+
+function disconnectMosaicThumbIo() {
+  if (mosaicThumbIo) {
+    try {
+      mosaicThumbIo.disconnect();
+    } catch {
+      /* ignore */
+    }
+    mosaicThumbIo = null;
+  }
+}
+
+function ensureMosaicThumbIo() {
+  if (mosaicThumbIo) return;
+  const root = canvasWrapEl && canvasWrapEl instanceof Element ? canvasWrapEl : null;
+  mosaicThumbIo = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const img = entry.target;
+        if (!(img instanceof HTMLImageElement)) continue;
+        const rawSrc = img.dataset.deferSrc;
+        const bid = img.dataset.blessingCellId;
+        if (!rawSrc) continue;
+        try {
+          mosaicThumbIo.unobserve(img);
+        } catch {
+          /* ignore */
+        }
+        delete img.dataset.deferSrc;
+        delete img.dataset.blessingCellId;
+        img.classList.remove("cell-preview--defer");
+        img.src = rawSrc;
+        if (bid) bindImageContentFallback(img, bid);
+      }
+    },
+    { root, rootMargin: "48px", threshold: 0 }
+  );
+}
+
+function registerMosaicDeferredThumb(img) {
+  if (!(img instanceof HTMLImageElement)) return;
+  ensureMosaicThumbIo();
+  if (mosaicThumbIo) mosaicThumbIo.observe(img);
+}
+
+/** 部分 WebView 在父级 transform 更新后不会立刻重算 IO，轻量 unobserve/observe 触发补载 */
+function scheduleMosaicIoNudge() {
+  if (!isMobileGridBatching() || !mosaicThumbIo) return;
+  if (mosaicIoNudgeTimer != null) window.clearTimeout(mosaicIoNudgeTimer);
+  mosaicIoNudgeTimer = window.setTimeout(() => {
+    mosaicIoNudgeTimer = null;
+    try {
+      const pending = mosaicEl.querySelectorAll("img.cell-preview--defer");
+      for (const el of pending) {
+        mosaicThumbIo.unobserve(el);
+        mosaicThumbIo.observe(el);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, 72);
+}
+
+function scheduleNextGridStep(stepFn) {
+  if (isMobileGridBatching()) {
+    const ric = window.requestIdleCallback;
+    if (typeof ric === "function") {
+      ric(
+        () => {
+          requestAnimationFrame(stepFn);
+        },
+        { timeout: 140 }
+      );
+    } else {
+      window.setTimeout(() => requestAnimationFrame(stepFn), 0);
+    }
+  } else {
+    requestAnimationFrame(stepFn);
+  }
+}
+
 /**
  * 移动端一次插入 1000 个格子 + 缩略图易导致 WKWebView/微信内核闪屏、内存尖峰；分帧追加减轻主线程与解码压力。
  */
 function renderGrid() {
+  disconnectMosaicThumbIo();
   mosaicEl.innerHTML = "";
-  const chunk = isMobileGridBatching() ? 32 : 250;
+  const chunk = isMobileGridBatching() ? 16 : 250;
   let i = 1;
   function step() {
     const end = Math.min(i + chunk - 1, TOTAL);
@@ -557,10 +653,14 @@ function renderGrid() {
       cell.classList.toggle("cell--placeholder", !item);
       cell.appendChild(buildCellPreviewEl(item, id));
       cell.addEventListener("click", () => openById(id));
+      if (isMobileGridBatching()) {
+        const thumb = cell.querySelector("img.cell-preview--defer");
+        if (thumb) registerMosaicDeferredThumb(thumb);
+      }
       frag.appendChild(cell);
     }
     mosaicEl.appendChild(frag);
-    if (i <= TOTAL) requestAnimationFrame(step);
+    if (i <= TOTAL) scheduleNextGridStep(step);
   }
   requestAnimationFrame(step);
 }
@@ -1505,6 +1605,7 @@ function initCanvasPanZoom() {
     } else {
       wrap.dataset.canvasZoom = "in";
     }
+    scheduleMosaicIoNudge();
   }
 
   function clampScale(s) {
