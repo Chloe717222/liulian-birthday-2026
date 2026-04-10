@@ -1,10 +1,19 @@
 /**
  * 将 data.json 中格子的 url 统一改为内链 ./content/{四位编号}.{扩展名}
+ * 若 content/ 下已有对应编号文件，会按优先级选用实际扩展名；否则用默认（图 jpg / 音 mp3 / 视 mp4）。
  * 运行：node scripts/rewrite-data-to-content-urls.mjs
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  CONTENT_MEDIA_DIR,
+  CONTENT_IMAGE_EXTS,
+  CONTENT_AUDIO_EXTS,
+  CONTENT_VIDEO_EXTS,
+  contentUrlFor,
+  pickExtFromDisk,
+} from "./content-media-exts.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -17,20 +26,40 @@ if (!data.items || typeof data.items !== "object") {
   process.exit(1);
 }
 
+const contentDir = path.join(root, CONTENT_MEDIA_DIR.replace(/^\.\//, ""));
+const extsById = new Map();
+if (fs.existsSync(contentDir)) {
+  for (const f of fs.readdirSync(contentDir)) {
+    const m = /^(\d{4})\.([a-z0-9]+)$/i.exec(f);
+    if (!m) continue;
+    const fileId = m[1];
+    const ext = m[2].toLowerCase();
+    if (!extsById.has(fileId)) extsById.set(fileId, []);
+    extsById.get(fileId).push(ext);
+  }
+}
+
 let n = 0;
 for (const [id, item] of Object.entries(data.items)) {
   if (!item || typeof item !== "object") continue;
   const t = String(item.type || "text").toLowerCase();
+  const disk = extsById.get(id) || [];
   let next = null;
   if (t === "text") {
     const u = String(item.url || "").trim();
-    if (!u || /^https?:\/\//i.test(u)) next = `./content/${id}.jpg`;
+    if (!u || /^https?:\/\//i.test(u)) {
+      const ext = pickExtFromDisk(CONTENT_IMAGE_EXTS, disk);
+      next = contentUrlFor(id, ext);
+    }
   } else if (t === "image") {
-    next = `./content/${id}.jpg`;
+    const ext = pickExtFromDisk(CONTENT_IMAGE_EXTS, disk);
+    next = contentUrlFor(id, ext);
   } else if (t === "audio") {
-    next = `./content/${id}.mp3`;
+    const ext = pickExtFromDisk(CONTENT_AUDIO_EXTS, disk);
+    next = contentUrlFor(id, ext);
   } else if (t === "video") {
-    next = `./content/${id}.mp4`;
+    const ext = pickExtFromDisk(CONTENT_VIDEO_EXTS, disk);
+    next = contentUrlFor(id, ext);
   }
   if (next != null && item.url !== next) {
     item.url = next;

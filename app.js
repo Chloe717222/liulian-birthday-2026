@@ -125,6 +125,30 @@ const fallbackHero = HERO_PLACEHOLDER_IMAGE;
 /** 与 CSV / 运营约定一致：格子配图默认文件名 */
 const CONTENT_MEDIA_DIR = "./content";
 
+/**
+ * 与 scripts/content-media-exts.mjs 同步（改扩展名时请两处一起改）
+ */
+const CONTENT_IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "svg"];
+const CONTENT_AUDIO_EXTS = ["mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"];
+const CONTENT_VIDEO_EXTS = ["mp4", "webm", "ogv", "mov", "m4v"];
+
+function contentUrlFor(id, ext) {
+  return `${CONTENT_MEDIA_DIR}/${id}.${ext}`;
+}
+
+/**
+ * 为 false（默认）：`data.json` 里 http(s) 配图/音视频链接原样使用，线上（如 GitHub Pages）可正常加载外链素材。
+ * 为 true：外网链改写成 `./content/0001.{首选图扩展名}` 并清空外链音视频——仅当你已把对应文件放进 `content/` 且不想请求外网时使用。
+ */
+const STRICT_LOCAL_MEDIA_ONLY = false;
+
+/**
+ * 为 true：格子在 data.json 里未写 url / imageUrl / thumbnail 时，仍尝试用内链
+ * `./content/0001.jpg`（四位编号与格子 id 一致）作为首张候选；加载失败会自动按 CONTENT_IMAGE_EXTS 顺序换扩展名再试。
+ * 音频 / 视频在仅有 type、无 url 时同理，按 CONTENT_AUDIO_EXTS / CONTENT_VIDEO_EXTS 链式尝试。
+ */
+const IMPLICIT_GRID_IMAGE_FROM_CONTENT_DIR = true;
+
 function isHttpUrl(s) {
   return /^https?:\/\//i.test(String(s || "").trim());
 }
@@ -266,7 +290,7 @@ function applyData(data) {
     contentMap.set(id, normalizeBlessingItem(id, item));
   }
   state.heroImage = data && data.heroImage ? data.heroImage : fallbackHero;
-  if (isHttpUrl(state.heroImage)) state.heroImage = fallbackHero;
+  if (STRICT_LOCAL_MEDIA_ONLY && isHttpUrl(state.heroImage)) state.heroImage = fallbackHero;
   heroImageEl.src = state.heroImage;
 }
 
@@ -288,18 +312,20 @@ function looksLikeImageAsset(u) {
   const s = String(u || "").trim();
   if (!s) return false;
   if (s.startsWith("data:image/") || s.startsWith("blob:")) return true;
-  if (/\.(mp3|mp4|webm|wav|m4a|ogg)(\?|$)/i.test(s)) return false;
+  if (/\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|webm|ogv|mov|m4v)(\?|$)/i.test(s)) return false;
   return /\.(jpe?g|png|gif|webp|svg|bmp)(\?|$)/i.test(s);
 }
 
 /**
- * 将 data.json / 本地缓存里遗留的外网演示链改为 content/ 相对路径，并去掉外网音视频的 url。
- * 配图统一尝试 `./content/0001.jpg`（可与实际 png 不一致时由 img error 回退占位图）。
+ * 在 STRICT_LOCAL_MEDIA_ONLY 时：把外网演示链改写成 content/ 相对路径并去掉外链音视频。
+ * 默认关闭，避免线上托管时因仓库里没有 `./content/0001.jpg` 而导致整格只剩灰块、音视频消失。
  */
 function coerceGridItemUrlsToLocalContent(id, raw) {
   if (!raw || typeof raw !== "object") return {};
+  if (!STRICT_LOCAL_MEDIA_ONLY) return { ...raw };
+
   const o = { ...raw };
-  const localPic = `${CONTENT_MEDIA_DIR}/${id}.jpg`;
+  const localPic = contentUrlFor(id, CONTENT_IMAGE_EXTS[0]);
 
   if (isHttpUrl(o.imageUrl)) o.imageUrl = localPic;
   if (isHttpUrl(o.thumbnail)) o.thumbnail = "";
@@ -310,9 +336,9 @@ function coerceGridItemUrlsToLocalContent(id, raw) {
   const legacy = String(o.url || "").trim();
   if (isHttpUrl(legacy)) {
     const t = String(o.type || "text").toLowerCase();
-    if (t === "audio" || /\.(mp3|m4a|wav|ogg)(\?|$)/i.test(legacy)) {
+    if (t === "audio" || /\.(mp3|m4a|aac|wav|ogg|opus|flac)(\?|$)/i.test(legacy)) {
       o.url = "";
-    } else if (t === "video" || /\.(mp4|webm)(\?|$)/i.test(legacy)) {
+    } else if (t === "video" || /\.(mp4|webm|ogv|mov|m4v)(\?|$)/i.test(legacy)) {
       o.url = "";
     } else if (looksLikeImageAsset(legacy) || t === "image") {
       o.url = localPic;
@@ -370,14 +396,21 @@ function normalizeBlessingItem(id, raw) {
   const type = String(r.type || "text").toLowerCase();
 
   let imageUrl = extractBlessingImageFromRaw(r);
+  if (!imageUrl && IMPLICIT_GRID_IMAGE_FROM_CONTENT_DIR) {
+    imageUrl = contentUrlFor(id, CONTENT_IMAGE_EXTS[0]);
+  }
   if (!imageUrl) imageUrl = fallbackGridImageUrl();
 
   let text = String(r.text || "").trim();
   const title = String(r.title || "").trim();
   if (!text) text = "（待补充文案）";
 
-  const audioUrl = extractBlessingAudioFromRaw(r);
-  const videoUrl = extractBlessingVideoFromRaw(r);
+  let audioUrl = extractBlessingAudioFromRaw(r);
+  let videoUrl = extractBlessingVideoFromRaw(r);
+  if (IMPLICIT_GRID_IMAGE_FROM_CONTENT_DIR) {
+    if (!audioUrl && type === "audio") audioUrl = contentUrlFor(id, CONTENT_AUDIO_EXTS[0]);
+    if (!videoUrl && type === "video") videoUrl = contentUrlFor(id, CONTENT_VIDEO_EXTS[0]);
+  }
 
   let url = String(r.url || "").trim();
   if (!url && imageUrl && type !== "audio" && type !== "video") url = imageUrl;
@@ -420,6 +453,62 @@ function modalImageAlt(item) {
   return line.length > 48 ? `${line.slice(0, 48)}…` : line;
 }
 
+/** 解析当前 URL 在约定扩展列表中的下标；对非 content/{id}.* 的外链返回 -1 */
+function contentExtIndexInUrl(src, id, extensions) {
+  const pathPart = String(src).split(/[?#]/)[0].toLowerCase();
+  const idLower = String(id).toLowerCase();
+  for (let i = 0; i < extensions.length; i++) {
+    const ext = String(extensions[i]).toLowerCase();
+    if (pathPart.endsWith(`/${idLower}.${ext}`) || pathPart.endsWith(`${idLower}.${ext}`)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** 加载失败时换下一个扩展名；无法继续则返回 null */
+function nextContentVariantUrl(failedSrc, id, extensions) {
+  const idx = contentExtIndexInUrl(failedSrc, id, extensions);
+  if (idx < 0) return null;
+  const nextIdx = idx + 1;
+  if (nextIdx >= extensions.length) return null;
+  return contentUrlFor(id, extensions[nextIdx]);
+}
+
+function bindImageContentFallback(img, id) {
+  img.addEventListener("error", function onImgChain() {
+    const next = nextContentVariantUrl(img.src, id, CONTENT_IMAGE_EXTS);
+    if (next) {
+      img.src = next;
+      return;
+    }
+    img.removeEventListener("error", onImgChain);
+    if (img.src !== GRID_PLACEHOLDER_IMAGE) img.src = GRID_PLACEHOLDER_IMAGE;
+  });
+}
+
+function bindAudioContentFallback(audio, id) {
+  audio.addEventListener("error", function onAudioChain() {
+    const next = nextContentVariantUrl(audio.src, id, CONTENT_AUDIO_EXTS);
+    if (next) {
+      audio.src = next;
+      return;
+    }
+    audio.removeEventListener("error", onAudioChain);
+  });
+}
+
+function bindVideoContentFallback(video, id) {
+  video.addEventListener("error", function onVideoChain() {
+    const next = nextContentVariantUrl(video.src, id, CONTENT_VIDEO_EXTS);
+    if (next) {
+      video.src = next;
+      return;
+    }
+    video.removeEventListener("error", onVideoChain);
+  });
+}
+
 function buildCellPreviewEl(item, id) {
   const wrap = document.createElement("div");
   wrap.className = "cell-preview-wrap";
@@ -431,10 +520,7 @@ function buildCellPreviewEl(item, id) {
   img.alt = "";
   img.loading = "lazy";
   img.decoding = "async";
-  img.addEventListener("error", function onThumbErr() {
-    img.removeEventListener("error", onThumbErr);
-    if (img.src !== GRID_PLACEHOLDER_IMAGE) img.src = GRID_PLACEHOLDER_IMAGE;
-  });
+  bindImageContentFallback(img, id);
 
   wrap.appendChild(img);
   return wrap;
@@ -475,10 +561,7 @@ function renderBlessingModal(item, cellId) {
     img.alt = modalImageAlt(item);
     img.loading = "eager";
     img.decoding = "async";
-    img.addEventListener("error", function onModalImgErr() {
-      img.removeEventListener("error", onModalImgErr);
-      if (img.src !== GRID_PLACEHOLDER_IMAGE) img.src = GRID_PLACEHOLDER_IMAGE;
-    });
+    bindImageContentFallback(img, cellId);
     wrap.appendChild(img);
   } else {
     wrap.classList.add("blessing-modal-body--media-only");
@@ -495,6 +578,7 @@ function renderBlessingModal(item, cellId) {
     audio.className = "blessing-modal-audio";
     audio.controls = true;
     audio.src = audioSrc;
+    bindAudioContentFallback(audio, cellId);
     wrap.appendChild(audio);
   }
 
@@ -504,6 +588,7 @@ function renderBlessingModal(item, cellId) {
     video.controls = true;
     video.playsInline = true;
     video.src = videoSrc;
+    bindVideoContentFallback(video, cellId);
     wrap.appendChild(video);
   }
 
