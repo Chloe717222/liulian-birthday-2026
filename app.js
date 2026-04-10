@@ -3,34 +3,43 @@ const GRID_ROWS = 25;
 const TOTAL = GRID_COLS * GRID_ROWS;
 const ADMIN_PASSWORD = "LIULIAN20260426";
 const LOCAL_KEY = "lianlian-bday-data-v1";
-const QUIZ_LOG_KEY = "lianlian-quiz-log-v1";
-const SURPRISE_VIDEO_URL = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+/** 彩蛋视频示例路径：与格子一样放在 content/，可自行替换文件 */
+const SURPRISE_VIDEO_URL = "./content/surprise.mp4";
+
+/**
+ * 六个小彩蛋（刘恋点「爱」后出现标题列表，任选其一）。
+ * type: "text" 用 text；"image"|"video"|"audio" 用 src（相对路径或 https）。
+ */
+const EASTER_EGGS = [
+  { title: "彩蛋① · 一段话", type: "text", text: "在这里写你的文字彩蛋～支持多行。\n换行也没问题。" },
+  { title: "彩蛋② · 一张图", type: "image", src: "./content/egg_02.jpg" },
+  { title: "彩蛋③ · 语音", type: "audio", src: "./content/egg_03.m4a" },
+  { title: "彩蛋④ · 视频", type: "video", src: SURPRISE_VIDEO_URL },
+  { title: "彩蛋⑤ · 再一段话", type: "text", text: "第二段文字彩蛋，按需改掉即可。" },
+  { title: "彩蛋⑥ · 再来一张图", type: "image", src: "./content/egg_06.jpg" },
+];
 
 const heroImageEl = document.getElementById("heroImage");
 const mosaicEl = document.getElementById("mosaic");
 const codeInputEl = document.getElementById("codeInput");
 const openBtnEl = document.getElementById("openBtn");
 const randomBtnEl = document.getElementById("randomBtn");
-const exportBlessingsBtnEl = document.getElementById("exportBlessingsBtn");
 const adminKickerBtnEl = document.getElementById("adminKickerBtn");
 const modalEl = document.getElementById("contentModal");
-const modalTitleEl = document.getElementById("modalTitle");
 const modalBodyEl = document.getElementById("modalBody");
-const blessingOwnerIdEl = document.getElementById("blessingOwnerId");
 const jumpInputEl = document.getElementById("jumpInput");
 const jumpBtnEl = document.getElementById("jumpBtn");
 const prevBlessingBtnEl = document.getElementById("prevBlessingBtn");
 const nextBlessingBtnEl = document.getElementById("nextBlessingBtn");
 const emptyTpl = document.getElementById("emptyTemplate");
-const loadStatusEl = document.getElementById("loadStatus");
 const adminModalEl = document.getElementById("adminModal");
 const csvFileEl = document.getElementById("csvFile");
 const imageFileEl = document.getElementById("imageFile");
 const dataFileEl = document.getElementById("dataFile");
+const bulkImageFilesEl = document.getElementById("bulkImageFiles");
 const saveLocalBtnEl = document.getElementById("saveLocalBtn");
 const downloadDataBtnEl = document.getElementById("downloadDataBtn");
 const clearLocalBtnEl = document.getElementById("clearLocalBtn");
-const exportQuizLogBtnEl = document.getElementById("exportQuizLogBtn");
 const adminStatusEl = document.getElementById("adminStatus");
 
 const quizEntryBtnEl = document.getElementById("quizEntryBtn");
@@ -46,27 +55,89 @@ const quizTitleEl = document.getElementById("quizTitle");
 const quizBodyEl = document.getElementById("quizBody");
 const quizActionRowEl = document.getElementById("quizActionRow");
 const quizSubmitBtnEl = document.getElementById("quizSubmitBtn");
-const canvasWrapEl = document.querySelector(".canvas-wrap");
+const canvasWrapEl = document.getElementById("canvasWrap") || document.querySelector(".canvas-wrap");
+const canvasStageEl = document.getElementById("canvasStage");
+const canvasResetBtnEl = document.getElementById("canvasResetBtn");
+/** 全屏生日门：完成后写入本地，刷新不再出现（须用函数取节点，避免脚本在 DOM 之前执行得到 null） */
+const CEREMONY_STORAGE_KEY = "lianlian-candle-ceremony-v1";
+/** 开幕页无操作则自动进入祝福页的等待时长（毫秒） */
+const BIRTHDAY_GATE_AUTO_MS = 5000;
 
-const contentMap = new Map();
-const fallbackHero = "https://picsum.photos/seed/lianlian-hero/1200/1500";
-const state = { heroImage: fallbackHero };
-let quizIndex = 0;
-let quizAttemptCount = 0;
-let currentModalId = null;
-let quizFeedbackTimer = null;
-let nextSequentialBlessing = 1;
-/** 每题通过后写入，供主图两侧上升祝福随机飘字（仅本地，不上传） */
-let quizAnswersForBlessing = [];
-const QUIZ_ANSWER_SIDE_MAX_LEN = 80;
-
-function clipBlessingSideText(s) {
-  const t = String(s || "").trim().replace(/\s+/g, " ");
-  if (t.length <= QUIZ_ANSWER_SIDE_MAX_LEN) return t;
-  return `${t.slice(0, QUIZ_ANSWER_SIDE_MAX_LEN)}…`;
+function getBirthdayGateEl() {
+  return document.getElementById("birthdayGate");
 }
 
-/** 答题内容与 CSV 混排飘字；字号分开：用户回复略大，CSV 维持原随机区间 */
+let birthdayBlowAnimating = false;
+/** 开幕页点击委托：清空本地后需 abort 再重新 bind */
+let birthdayGateClickAbort = null;
+let birthdayGateAutoEnterTimerId = null;
+
+function clearBirthdayGateAutoEnterTimer() {
+  if (birthdayGateAutoEnterTimerId != null) {
+    window.clearTimeout(birthdayGateAutoEnterTimerId);
+    birthdayGateAutoEnterTimerId = null;
+  }
+}
+
+function onBirthdayGateAutoEnterTick() {
+  birthdayGateAutoEnterTimerId = null;
+  try {
+    if (localStorage.getItem(CEREMONY_STORAGE_KEY) === "1") return;
+    if (!getBirthdayGateEl()) return;
+    completeCandleCeremony();
+  } catch {
+    try {
+      localStorage.setItem(CEREMONY_STORAGE_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    syncBirthdayGateVisibility();
+  }
+}
+
+function scheduleBirthdayGateAutoEnter() {
+  clearBirthdayGateAutoEnterTimer();
+  birthdayGateAutoEnterTimerId = window.setTimeout(onBirthdayGateAutoEnterTick, BIRTHDAY_GATE_AUTO_MS);
+}
+
+const contentMap = new Map();
+/** 「仅登记路径」批量上传时创建的预览用 blob: URL，新一批上传前 revoke，避免泄漏与占内存 */
+const bulkPreviewObjectUrls = new Set();
+
+function revokeAllBulkPreviewUrls() {
+  for (const u of bulkPreviewObjectUrls) {
+    try {
+      URL.revokeObjectURL(u);
+    } catch {
+      /* ignore */
+    }
+  }
+  bulkPreviewObjectUrls.clear();
+}
+
+/** 无 data.json 主视觉时的占位（不请求外网）；主视觉请在后台上传 */
+const HERO_PLACEHOLDER_IMAGE =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500"><rect fill="#dfe3e8" width="1200" height="1500"/><text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" fill="#9aa0a6" font-family="system-ui,sans-serif" font-size="26">主视觉（后台上传底图）</text></svg>'
+  );
+const fallbackHero = HERO_PLACEHOLDER_IMAGE;
+/** 与 CSV / 运营约定一致：格子配图默认文件名 */
+const CONTENT_MEDIA_DIR = "./content";
+
+function isHttpUrl(s) {
+  return /^https?:\/\//i.test(String(s || "").trim());
+}
+
+const state = { heroImage: fallbackHero };
+let currentModalId = null;
+let nextSequentialBlessing = 1;
+/** 与 CSV 混排飘字用；彩蛋直出后通常为空（仅本地，不上传） */
+let quizAnswersForBlessing = [];
+/** 彩蛋多步弹窗进行中：关弹窗或点「退出」→「我们邀请刘恋…」整段 */
+let eggFlowActive = false;
+
+/** 内容与 CSV 混排飘字；字号分开：用户来源略大，CSV 维持原随机区间 */
 function getSidesShowerPhraseEntries() {
   const csv = getBlessingTextsFromContent().map((text) => ({ text, source: "csv" }));
   const userUniq = [...new Set(quizAnswersForBlessing.filter(Boolean))];
@@ -81,7 +152,9 @@ function randomSideFontPx(source) {
 }
 
 function normalizeId(raw) {
-  const clean = String(raw || "").replace(/[^\d]/g, "");
+  let s = String(raw || "");
+  s = s.replace(/[\uFF10-\uFF19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 0x30));
+  const clean = s.replace(/[^\d]/g, "");
   if (!clean) return null;
   const n = Number.parseInt(clean, 10);
   if (Number.isNaN(n) || n < 1 || n > TOTAL) return null;
@@ -124,14 +197,23 @@ function parseCsv(text) {
   current.push(field);
   if (current.some((x) => String(x).trim() !== "")) rows.push(current);
   if (rows.length < 2) return [];
-  const headers = rows[0].map((x) => String(x).trim());
+  const headers = rows[0].map((x) => String(x).trim().replace(/^\uFEFF/, ""));
   return rows.slice(1).map((cols) => {
-    const row = {};
+    const trimmedCols = cols.map((c) => String(c ?? "").trim());
+    const row = { __rawCols: trimmedCols };
     headers.forEach((key, i) => {
-      row[key] = (cols[i] || "").trim();
+      row[key] = trimmedCols[i] ?? "";
     });
     return row;
   });
+}
+
+/** 五列标准顺序兜底：0 编号 1 文案 2 图片 3 音频 4 视频（表头重复/乱码时仍可读） */
+function csvRowCol(row, idx) {
+  if (row && Array.isArray(row.__rawCols) && row.__rawCols[idx] != null) {
+    return String(row.__rawCols[idx]).trim();
+  }
+  return "";
 }
 
 function pickValue(row, keys) {
@@ -141,9 +223,32 @@ function pickValue(row, keys) {
   return "";
 }
 
+/** CSV 表头因编码乱码时 row['编号'] 可能不存在，用第一列作为编号兜底 */
+function pickBlessingIdRaw(row) {
+  const fromNamed = pickValue(row, ["id", "ID", "编号", "号码", "序号"]);
+  if (fromNamed) return fromNamed;
+  const c0 = csvRowCol(row, 0);
+  if (c0) return c0;
+  for (const v of Object.values(row)) {
+    if (Array.isArray(v)) continue;
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
 function getPayload() {
   const items = {};
-  for (const [id, item] of contentMap.entries()) items[id] = item;
+  for (const [id, item] of contentMap.entries()) {
+    const row = { ...item };
+    const img = String(row.imageUrl || "");
+    /** blob: 仅用于本页预览；写入 JSON / localStorage 时改回可部署的相对路径 */
+    if (img.startsWith("blob:") && row.persistedPath) {
+      row.imageUrl = row.persistedPath;
+      row.url = row.persistedPath;
+    }
+    delete row.persistedPath;
+    items[id] = row;
+  }
   return {
     version: 1,
     range: { min: 1, max: TOTAL, cols: GRID_COLS, rows: GRID_ROWS },
@@ -158,10 +263,181 @@ function applyData(data) {
   for (const [idRaw, item] of Object.entries(items)) {
     const id = normalizeId(idRaw);
     if (!id) continue;
-    contentMap.set(id, item);
+    contentMap.set(id, normalizeBlessingItem(id, item));
   }
   state.heroImage = data && data.heroImage ? data.heroImage : fallbackHero;
+  if (isHttpUrl(state.heroImage)) state.heroImage = fallbackHero;
   heroImageEl.src = state.heroImage;
+}
+
+/**
+ * 无配图时的占位：极小的内联 SVG，不发起外网请求，减轻 1000 格负担（同源缓存一条即可）
+ */
+const GRID_PLACEHOLDER_IMAGE =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect fill="#e8eaed" width="64" height="64"/></svg>'
+  );
+
+function fallbackGridImageUrl() {
+  return GRID_PLACEHOLDER_IMAGE;
+}
+
+/** 判断 `url` 是否更像配图，而非音视频（用于 legacy 数据） */
+function looksLikeImageAsset(u) {
+  const s = String(u || "").trim();
+  if (!s) return false;
+  if (s.startsWith("data:image/") || s.startsWith("blob:")) return true;
+  if (/\.(mp3|mp4|webm|wav|m4a|ogg)(\?|$)/i.test(s)) return false;
+  return /\.(jpe?g|png|gif|webp|svg|bmp)(\?|$)/i.test(s);
+}
+
+/**
+ * 将 data.json / 本地缓存里遗留的外网演示链改为 content/ 相对路径，并去掉外网音视频的 url。
+ * 配图统一尝试 `./content/0001.jpg`（可与实际 png 不一致时由 img error 回退占位图）。
+ */
+function coerceGridItemUrlsToLocalContent(id, raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const o = { ...raw };
+  const localPic = `${CONTENT_MEDIA_DIR}/${id}.jpg`;
+
+  if (isHttpUrl(o.imageUrl)) o.imageUrl = localPic;
+  if (isHttpUrl(o.thumbnail)) o.thumbnail = "";
+
+  if (isHttpUrl(o.audioUrl)) o.audioUrl = "";
+  if (isHttpUrl(o.videoUrl)) o.videoUrl = "";
+
+  const legacy = String(o.url || "").trim();
+  if (isHttpUrl(legacy)) {
+    const t = String(o.type || "text").toLowerCase();
+    if (t === "audio" || /\.(mp3|m4a|wav|ogg)(\?|$)/i.test(legacy)) {
+      o.url = "";
+    } else if (t === "video" || /\.(mp4|webm)(\?|$)/i.test(legacy)) {
+      o.url = "";
+    } else if (looksLikeImageAsset(legacy) || t === "image") {
+      o.url = localPic;
+    } else {
+      o.url = "";
+    }
+  }
+
+  return o;
+}
+
+/**
+ * 从原始字段解析「配图」URL（不含兜底）；用于 normalize。
+ * 优先级：imageUrl → thumbnail → type=image 时的 url → 非音视频类型下、url 像图片时
+ */
+function extractBlessingImageFromRaw(r) {
+  const t = String(r.type || "text").toLowerCase();
+  const legacy = String(r.url || "").trim();
+  return (
+    String(r.imageUrl || "").trim() ||
+    String(r.thumbnail || "").trim() ||
+    (t === "image" ? legacy : "") ||
+    (t !== "audio" && t !== "video" && legacy && looksLikeImageAsset(legacy) ? legacy : "")
+  );
+}
+
+/** 音频：显式 audioUrl，或 legacy type=audio 时的主 url */
+function extractBlessingAudioFromRaw(r) {
+  const explicit = String(r.audioUrl || "").trim();
+  if (explicit) return explicit;
+  const t = String(r.type || "text").toLowerCase();
+  const legacy = String(r.url || "").trim();
+  if (t === "audio" && legacy) return legacy;
+  return "";
+}
+
+/** 视频：显式 videoUrl，或 legacy type=video 时的主 url */
+function extractBlessingVideoFromRaw(r) {
+  const explicit = String(r.videoUrl || "").trim();
+  if (explicit) return explicit;
+  const t = String(r.type || "text").toLowerCase();
+  const legacy = String(r.url || "").trim();
+  if (t === "video" && legacy) return legacy;
+  return "";
+}
+
+/**
+ * 归一化每条格子数据（唯一数据源）：
+ * - imageUrl：必有（无则占位图），供格子缩略图 + 弹窗大图
+ * - text：必有（空则占位文案）
+ * - audioUrl / videoUrl：有则弹窗展示对应控件，无则不渲染
+ */
+function normalizeBlessingItem(id, raw) {
+  const r = coerceGridItemUrlsToLocalContent(id, raw && typeof raw === "object" ? raw : {});
+  const type = String(r.type || "text").toLowerCase();
+
+  let imageUrl = extractBlessingImageFromRaw(r);
+  if (!imageUrl) imageUrl = fallbackGridImageUrl();
+
+  let text = String(r.text || "").trim();
+  const title = String(r.title || "").trim();
+  if (!text) text = "（待补充文案）";
+
+  const audioUrl = extractBlessingAudioFromRaw(r);
+  const videoUrl = extractBlessingVideoFromRaw(r);
+
+  let url = String(r.url || "").trim();
+  if (!url && imageUrl && type !== "audio" && type !== "video") url = imageUrl;
+
+  const persistedPath = String(r.persistedPath || "").trim();
+
+  return {
+    type,
+    title,
+    text,
+    url,
+    imageUrl,
+    thumbnail: String(r.thumbnail || "").trim(),
+    audioUrl,
+    videoUrl,
+    persistedPath: persistedPath || undefined,
+    senderId: r.senderId,
+    userId: r.userId,
+    fanId: r.fanId,
+    fromId: r.fromId,
+  };
+}
+
+/** 格子与弹窗共用：normalize 后必有 imageUrl；无 item 时用占位 */
+function blessingImageSrc(item, id) {
+  const u = item && String(item.imageUrl || "").trim();
+  if (u) return u;
+  return fallbackGridImageUrl();
+}
+
+function blessingModalCopyText(item) {
+  const t = String(item.text || "").trim();
+  return t || "（待补充文案）";
+}
+
+/** 弹窗大图 alt：用文案首行摘要，不依赖「标题」字段 */
+function modalImageAlt(item) {
+  const line = blessingModalCopyText(item).split(/\r?\n/)[0].trim();
+  if (!line || line === "（待补充文案）") return "配图";
+  return line.length > 48 ? `${line.slice(0, 48)}…` : line;
+}
+
+function buildCellPreviewEl(item, id) {
+  const wrap = document.createElement("div");
+  wrap.className = "cell-preview-wrap";
+  wrap.setAttribute("aria-hidden", "true");
+
+  const img = document.createElement("img");
+  img.className = "cell-preview cell-preview--thumb";
+  img.src = blessingImageSrc(item, id);
+  img.alt = "";
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.addEventListener("error", function onThumbErr() {
+    img.removeEventListener("error", onThumbErr);
+    if (img.src !== GRID_PLACEHOLDER_IMAGE) img.src = GRID_PLACEHOLDER_IMAGE;
+  });
+
+  wrap.appendChild(img);
+  return wrap;
 }
 
 function renderGrid() {
@@ -171,63 +447,89 @@ function renderGrid() {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "cell";
-    cell.title = `编号 ${id}`;
-    if (contentMap.has(id)) cell.classList.add("has-content");
+    const item = contentMap.get(id);
+    cell.classList.toggle("has-content", Boolean(item));
+    cell.classList.toggle("cell--placeholder", !item);
+    cell.appendChild(buildCellPreviewEl(item, id));
     cell.addEventListener("click", () => openById(id));
     mosaicEl.appendChild(cell);
   }
 }
 
-function renderItem(item) {
+/**
+ * 弹窗结构：默认 配图 → 文案 →（可选）音频 →（可选）视频。
+ * 若有音频或视频：不展示弹窗大图（配图仅用于格子缩略图）。
+ */
+function renderBlessingModal(item, cellId) {
   const wrap = document.createElement("div");
-  if (item.text) {
-    const p = document.createElement("p");
-    p.textContent = item.text;
-    p.style.marginBottom = "12px";
-    wrap.appendChild(p);
-  }
-  if (item.type === "image" && item.url) {
+  wrap.className = "blessing-modal-body";
+
+  const audioSrc = String(item.audioUrl || "").trim();
+  const videoSrc = String(item.videoUrl || "").trim();
+  const skipModalImage = Boolean(audioSrc || videoSrc);
+
+  if (!skipModalImage) {
     const img = document.createElement("img");
-    img.src = item.url;
-    img.alt = item.title || "图片祝福";
+    img.className = "blessing-modal-image";
+    img.src = blessingImageSrc(item, cellId);
+    img.alt = modalImageAlt(item);
+    img.loading = "eager";
+    img.decoding = "async";
+    img.addEventListener("error", function onModalImgErr() {
+      img.removeEventListener("error", onModalImgErr);
+      if (img.src !== GRID_PLACEHOLDER_IMAGE) img.src = GRID_PLACEHOLDER_IMAGE;
+    });
     wrap.appendChild(img);
-  } else if (item.type === "audio" && item.url) {
+  } else {
+    wrap.classList.add("blessing-modal-body--media-only");
+  }
+
+  const p = document.createElement("p");
+  p.className = "blessing-modal-copy";
+  p.textContent = blessingModalCopyText(item);
+  p.style.whiteSpace = "pre-wrap";
+  wrap.appendChild(p);
+
+  if (audioSrc) {
     const audio = document.createElement("audio");
+    audio.className = "blessing-modal-audio";
     audio.controls = true;
-    audio.src = item.url;
+    audio.src = audioSrc;
     wrap.appendChild(audio);
-  } else if (item.type === "video" && item.url) {
+  }
+
+  if (videoSrc) {
     const video = document.createElement("video");
+    video.className = "blessing-modal-video";
     video.controls = true;
-    video.src = item.url;
+    video.playsInline = true;
+    video.src = videoSrc;
     wrap.appendChild(video);
   }
+
   return wrap;
 }
 
 function openById(rawId) {
   const id = normalizeId(rawId);
   if (!id) {
-    alert("请输入 0001-1000 之间的编号。");
+    alert("请输入 0001–1000 之间的四位数字。");
     return;
   }
-  modalTitleEl.textContent = `编号 ${id}`;
   currentModalId = id;
   modalBodyEl.innerHTML = "";
   const item = contentMap.get(id);
   if (!item) {
-    modalBodyEl.appendChild(emptyTpl.content.cloneNode(true));
-    blessingOwnerIdEl.textContent = `祝福ID：${id}`;
+    const placeholder = normalizeBlessingItem(id, {
+      type: "image",
+      title: "",
+      text: "本格尚未导入数据。请在运营后台上传含「文案」与「图片url」的 CSV（如 ./content/0001.jpg），或使用 demo-import.csv 演示。",
+      imageUrl: fallbackGridImageUrl(),
+      url: fallbackGridImageUrl(),
+    });
+    modalBodyEl.appendChild(renderBlessingModal(placeholder, id));
   } else {
-    if (item.title) {
-      const h3 = document.createElement("h3");
-      h3.textContent = item.title;
-      h3.style.marginTop = "0";
-      modalBodyEl.appendChild(h3);
-    }
-    modalBodyEl.appendChild(renderItem(item));
-    const ownerId = item.senderId || item.userId || item.fanId || item.fromId || id;
-    blessingOwnerIdEl.textContent = `祝福ID：${ownerId}`;
+    modalBodyEl.appendChild(renderBlessingModal(item, id));
   }
   jumpInputEl.value = id;
   if (!modalEl.open) modalEl.showModal();
@@ -257,64 +559,171 @@ function nextSequentialBlessingId() {
   return id;
 }
 
-function exportAllBlessings() {
-  const rows = Array.from(contentMap.entries())
-    .sort((a, b) => a[0].localeCompare(b[0], "zh-Hans-CN"))
-    .map(([id, item]) => {
-      const lines = [
-        `编号: ${id}`,
-        `类型: ${item.type || ""}`,
-        `标题: ${item.title || ""}`,
-        `文案: ${item.text || ""}`,
-        `链接: ${item.url || ""}`,
-      ];
-      return lines.join("\n");
-    });
+function setAdminStatus(msg) {
+  if (adminStatusEl) adminStatusEl.textContent = `状态：${msg}`;
+}
 
-  if (!rows.length) {
-    alert("当前没有可导出的祝福内容。");
+/** 与首页 Happy Birthday 相同：密码通过后打开运营管理弹窗（生日门全屏时也可点） */
+function openAdminAfterPasswordPrompt() {
+  if (!adminModalEl) {
+    alert("未能打开后台：找不到管理弹窗，请刷新页面重试。");
+    return;
+  }
+  alert("这里是后台管理入口，非运营同学请返回主页哦～");
+  const pwd = prompt("请输入后台管理密码");
+  if (pwd !== ADMIN_PASSWORD) {
+    alert("密码错误。");
+    return;
+  }
+  try {
+    adminModalEl.showModal();
+  } catch (e) {
+    alert("无法打开管理窗口，请刷新页面后重试。");
+    return;
+  }
+  setAdminStatus("已进入运营模式。");
+}
+
+function syncBirthdayGateVisibility() {
+  const gate = getBirthdayGateEl();
+  if (!gate) return;
+  const done = localStorage.getItem(CEREMONY_STORAGE_KEY) === "1";
+  gate.hidden = done;
+  if (!done) {
+    gate.removeAttribute("hidden");
+    gate.removeAttribute("aria-hidden");
+  } else {
+    gate.setAttribute("hidden", "");
+    gate.setAttribute("aria-hidden", "true");
+  }
+  document.body.style.overflow = done ? "" : "hidden";
+}
+
+function resetBirthdayGateCandles() {
+  birthdayBlowAnimating = false;
+  const gate = getBirthdayGateEl();
+  if (!gate) return;
+  gate.querySelectorAll(".birthday-gate__candle.is-blown").forEach((el) => {
+    el.classList.remove("is-blown");
+  });
+  const mouth = gate.querySelector(".birthday-gate__mouth");
+  if (mouth) mouth.classList.remove("is-blowing");
+  const puff = gate.querySelector(".birthday-gate__puff");
+  if (puff) puff.classList.remove("is-active");
+}
+
+/**
+ * 仅由「清空本地」调用：恢复开幕页，但不启动定时自动进入，避免运营清数据后误写入「仪式已完成」。
+ * 刷新整页后仍会按正常逻辑自动计时。
+ */
+function resetBirthdayGateUi() {
+  clearBirthdayGateAutoEnterTimer();
+  if (birthdayGateClickAbort) {
+    birthdayGateClickAbort.abort();
+    birthdayGateClickAbort = null;
+  }
+  const gate = getBirthdayGateEl();
+  if (!gate) return;
+  gate.classList.remove("birthday-gate--out");
+  resetBirthdayGateCandles();
+  syncBirthdayGateVisibility();
+  initBirthdayGate({ suppressAutoEnter: true });
+}
+
+function playBirthdayBlowAnimation(onMidExtinguish) {
+  const gate = getBirthdayGateEl();
+  const mouth = gate && gate.querySelector(".birthday-gate__mouth");
+  const puff = gate && gate.querySelector(".birthday-gate__puff");
+  if (mouth) {
+    mouth.classList.remove("is-blowing");
+    void mouth.offsetWidth;
+    mouth.classList.add("is-blowing");
+  }
+  if (puff) {
+    puff.classList.remove("is-active");
+    void puff.offsetWidth;
+    puff.classList.add("is-active");
+  }
+  window.setTimeout(() => {
+    if (typeof onMidExtinguish === "function") onMidExtinguish();
+  }, 220);
+  window.setTimeout(() => {
+    if (mouth) mouth.classList.remove("is-blowing");
+    if (puff) puff.classList.remove("is-active");
+  }, 520);
+}
+
+function onBirthdayGateDelegatedClick(e) {
+  const gate = getBirthdayGateEl();
+  if (!gate) return;
+  const cakeBtn = e.target.closest("#birthdayGateCakeBtn");
+  if (!cakeBtn || !gate.contains(cakeBtn)) return;
+  clearBirthdayGateAutoEnterTimer();
+  e.preventDefault();
+  if (birthdayBlowAnimating) return;
+  birthdayBlowAnimating = true;
+  playBirthdayBlowAnimation(() => {
+    const g = getBirthdayGateEl();
+    const el = g && g.querySelector(".birthday-gate__candle");
+    if (el) el.classList.add("is-blown");
+  });
+  window.setTimeout(() => {
+    birthdayBlowAnimating = false;
+    completeCandleCeremony();
+  }, 560);
+}
+
+function completeCandleCeremony() {
+  clearBirthdayGateAutoEnterTimer();
+  const gate = getBirthdayGateEl();
+  if (!gate || localStorage.getItem(CEREMONY_STORAGE_KEY) === "1") return;
+  try {
+    localStorage.setItem(CEREMONY_STORAGE_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  const finalize = () => {
+    const g = getBirthdayGateEl();
+    if (g) g.classList.remove("birthday-gate--out");
+    resetBirthdayGateCandles();
+    syncBirthdayGateVisibility();
+  };
+  gate.classList.add("birthday-gate--out");
+  window.setTimeout(finalize, 480);
+}
+
+function initBirthdayGate(options = {}) {
+  const gate = getBirthdayGateEl();
+  if (!gate) return;
+
+  syncBirthdayGateVisibility();
+
+  if (localStorage.getItem(CEREMONY_STORAGE_KEY) === "1") {
+    clearBirthdayGateAutoEnterTimer();
     return;
   }
 
-  const text = rows.join("\n\n--------------------\n\n");
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `全部祝福_${new Date().toISOString().slice(0, 10)}.txt`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function unlockBlessingExport() {
-  if (!exportBlessingsBtnEl) return;
-  exportBlessingsBtnEl.classList.remove("hidden");
-}
-
-function setAdminStatus(msg) {
-  adminStatusEl.textContent = `状态：${msg}`;
-}
-
-function getQuizLog() {
-  try {
-    const raw = localStorage.getItem(QUIZ_LOG_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
+  if (birthdayGateClickAbort) {
+    birthdayGateClickAbort.abort();
+    birthdayGateClickAbort = null;
+  }
+  birthdayGateClickAbort = new AbortController();
+  /** 委托在 #birthdayGate 上，蛋糕内任意子元素点击也能命中 */
+  gate.addEventListener("click", onBirthdayGateDelegatedClick, { signal: birthdayGateClickAbort.signal });
+  if (!options.suppressAutoEnter) {
+    scheduleBirthdayGateAutoEnter();
   }
 }
 
-function pushQuizLog(record) {
-  const logs = getQuizLog();
-  logs.push(record);
-  localStorage.setItem(QUIZ_LOG_KEY, JSON.stringify(logs));
-}
-
 function saveToLocal() {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(getPayload()));
-  setAdminStatus("已保存到当前浏览器。");
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(getPayload()));
+    setAdminStatus("已保存到当前浏览器。");
+  } catch (e) {
+    const msg = e && e.name === "QuotaExceededError" ? "超出浏览器存储上限。" : String(e && e.message ? e.message : e);
+    setAdminStatus(`保存失败：${msg} 若使用「嵌入 Base64」批量图，请改「仅登记路径」并配合 media 文件夹，或改用下载 data.json。`);
+    alert(`保存失败：${msg}`);
+  }
 }
 
 function importCsv(text) {
@@ -326,24 +735,52 @@ function importCsv(text) {
   let ok = 0;
   let skip = 0;
   for (const row of rows) {
-    const id = normalizeId(pickValue(row, ["id", "ID", "编号", "号码", "序号"]));
+    const id = normalizeId(pickBlessingIdRaw(row));
     if (!id) {
       skip += 1;
       continue;
     }
     const typeRaw = pickValue(row, ["type", "类型", "内容类型"]).toLowerCase();
     const typeMap = { text: "text", image: "image", audio: "audio", video: "video", 文案: "text", 文字: "text", 图片: "image", 语音: "audio", 音频: "audio", 视频: "video" };
-    contentMap.set(id, {
-      type: typeMap[typeRaw] || "text",
+    let imageUrl = pickValue(row, [
+      "imageUrl",
+      "image_url",
+      "图片url",
+      "图片URL",
+      "图片链接",
+      "主图",
+      "图片地址",
+    ]);
+    let audioUrl = pickValue(row, ["audioUrl", "audio_url", "音频url", "音频URL", "音频链接", "音频"]);
+    let videoUrl = pickValue(row, ["videoUrl", "video_url", "视频url", "视频URL", "视频链接", "视频"]);
+    if (!imageUrl) imageUrl = csvRowCol(row, 2);
+    if (!audioUrl) audioUrl = csvRowCol(row, 3);
+    if (!videoUrl) videoUrl = csvRowCol(row, 4);
+    const legacyUrl = pickValue(row, ["url", "链接", "资源链接", "媒体链接"]);
+    const type = typeMap[typeRaw] || "text";
+    const url = imageUrl || legacyUrl || "";
+    let text = pickValue(row, ["text", "文案", "祝福", "祝福内容", "陌"]);
+    if (!text) text = csvRowCol(row, 1);
+    const rowItem = {
+      type,
       title: pickValue(row, ["title", "标题"]),
-      text: pickValue(row, ["text", "文案", "祝福", "祝福内容"]),
-      url: pickValue(row, ["url", "链接", "资源链接", "媒体链接"]),
+      text,
+      url,
+      imageUrl: imageUrl || "",
       thumbnail: pickValue(row, ["thumbnail", "封面", "缩略图"]),
-    });
+      audioUrl: audioUrl || "",
+      videoUrl: videoUrl || "",
+    };
+    contentMap.set(id, normalizeBlessingItem(id, rowItem));
     ok += 1;
   }
   renderGrid();
-  setAdminStatus(`CSV 导入成功 ${ok} 条，跳过 ${skip} 条。`);
+  let msg = `CSV 导入成功 ${ok} 条，跳过 ${skip} 条。`;
+  if (ok === 0 && skip > 0) {
+    msg +=
+      " 未识别编号：请确认首列为四位数字；若表头为乱码，请用 Excel「CSV UTF-8」或记事本另存为 UTF-8 后再导入。";
+  }
+  setAdminStatus(msg);
 }
 
 function fileToDataUrl(file) {
@@ -366,136 +803,104 @@ function downloadData() {
   setAdminStatus("已下载 data.json。");
 }
 
-function clearLocal() {
+async function clearLocal() {
   localStorage.removeItem(LOCAL_KEY);
-  setAdminStatus("已清空本地运营数据。刷新后将回到 data.json/演示数据。");
+  localStorage.removeItem(CEREMONY_STORAGE_KEY);
+  /** 原生 dialog 在顶层，不关会盖住开幕页，看起来像「门没了」 */
+  if (adminModalEl && adminModalEl.open) {
+    try {
+      adminModalEl.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  resetBirthdayGateUi();
+  await loadData();
+  setAdminStatus(
+    "已清空本地运营数据（含开幕状态）。开幕页已重新出现：请点蛋糕进入；本次不会自动跳过（防误记为已完成）。刷新页面后约 5 秒无操作会自动进入。"
+  );
 }
 
-/** 题干保持你给的篇幅，语气略柔；回复短而承接题意。 */
-const quizQuestions = [
-  {
-    type: "text",
-    prompt: "第1题：写一句送给自己的生日祝福。",
-    check: (v) => v.trim().length > 0,
-    feedback: "写给自己的话，一定作数。愿你如愿！",
-  },
-  {
-    type: "text",
-    prompt: "第2题：我最喜欢自己______。",
-    check: (v) => v.trim().length > 0,
-    feedback: "这样喜欢自己，真好。",
-  },
-  {
-    type: "text",
-    prompt: "第3题：无论发生什么，我都值得______。",
-    check: (v) => v.trim().length > 0,
-    feedback: "嗯，你值得。",
-  },
-  {
-    type: "text",
-    prompt: "第4题：写一件你希望为自己做的事。",
-    check: (v) => v.trim().length > 0,
-    feedback: "能想着为自己做一件，就很棒。慢慢来。",
-  },
-  {
-    type: "text",
-    prompt: "第5题：我很喜欢自己______的一面。",
-    check: (v) => v.trim().length > 0,
-    feedback: "这一面，本来就好。",
-  },
-  {
-    type: "text",
-    prompt: "第6题：遇到困难时，你最想对自己说什么？",
-    check: (v) => v.trim().length > 0,
-    feedback: "可以的！我们一起。",
-  },
-  {
-    type: "text",
-    prompt: "第7题：我会永远______自己。",
-    check: (v) => v.trim().length > 0,
-    feedback: "愿你一直站自己这边。",
-  },
-  {
-    type: "text",
-    prompt: "第8题：写一句最想对自己说的话。",
-    check: (v) => v.trim().length > 0,
-    feedback: "你值得世上一切美好！",
-  },
-];
+/** 前情提要里点「爱」后：不再答题，直接你棒棒 + 彩蛋视频 */
+function escapeHtmlEgg(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-function renderQuizQuestion() {
-  const q = quizQuestions[quizIndex];
-  quizTitleEl.textContent = `第 ${quizIndex + 1} 题 / 8`;
-  quizActionRowEl.classList.remove("hidden");
-  if (quizFeedbackTimer) {
-    clearTimeout(quizFeedbackTimer);
-    quizFeedbackTimer = null;
-  }
+function escapeAttrEgg(s) {
+  return String(s ?? "").replace(/"/g, "&quot;");
+}
 
-  if (q.type === "choice") {
-    const options = q.options
-      .map(
-        (op, idx) =>
-          `<label><input type="radio" name="quizOption" value="${idx + 1}"> ${String.fromCharCode(65 + idx)}. ${op}</label>`
-      )
-      .join("<br>");
-    quizBodyEl.innerHTML = `<p class="quiz-prompt">${q.prompt}</p><div>${options}</div><p id="quizInlineFeedback" class="quiz-inline-feedback" aria-live="polite"></p>`;
+function showEggTitlePicker() {
+  if (!quizBodyEl || !quizTitleEl) return;
+  quizTitleEl.textContent = "选一个彩蛋～";
+  const btns = EASTER_EGGS.map(
+    (egg, i) =>
+      `<button type="button" class="egg-picker-btn" data-egg-index="${i}">${escapeHtmlEgg(egg.title)}</button>`
+  ).join("");
+  quizBodyEl.innerHTML = `<p class="egg-picker-hint">点标题打开对应彩蛋（文字 / 图 / 语音 / 视频）。</p><div class="egg-picker-grid">${btns}</div>`;
+  quizBodyEl.querySelectorAll(".egg-picker-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.getAttribute("data-egg-index"));
+      openEasterEggAtIndex(i);
+    });
+  });
+}
+
+function openEasterEggAtIndex(index) {
+  const egg = EASTER_EGGS[index];
+  if (!egg || !quizBodyEl || !quizTitleEl) return;
+  quizTitleEl.textContent = egg.title;
+  let media = "";
+  if (egg.type === "text") {
+    const body = escapeHtmlEgg(egg.text || "").replace(/\n/g, "<br>");
+    media = `<div class="egg-text-block">${body}</div>`;
+  } else if (egg.type === "image") {
+    const src = escapeAttrEgg(egg.src || "");
+    media = `<img class="egg-media egg-media--img" src="${src}" alt="" loading="lazy">`;
+  } else if (egg.type === "video") {
+    const src = escapeAttrEgg(egg.src || "");
+    media = `<video class="egg-media egg-media--video" controls playsinline src="${src}"></video>`;
+  } else if (egg.type === "audio") {
+    const src = escapeAttrEgg(egg.src || "");
+    media = `<p class="egg-audio-caption">语音彩蛋</p><audio class="egg-media egg-media--audio" controls src="${src}"></audio>`;
   } else {
-    quizBodyEl.innerHTML = `<p class="quiz-prompt">${q.prompt}</p><textarea id="quizTextAnswer" class="quiz-text-input" rows="4" autocomplete="off" placeholder="想写什么、写多长都可以"></textarea><p id="quizInlineFeedback" class="quiz-inline-feedback" aria-live="polite"></p>`;
+    media = `<p class="egg-unknown-type">未知类型彩蛋</p>`;
   }
+  quizBodyEl.innerHTML = `<div class="egg-view">${media}</div><div class="egg-after"><p class="egg-after-q">还要看下一个彩蛋吗？</p><div class="egg-after-btns"><button type="button" class="egg-btn-next" id="eggBtnNext">换一个</button><button type="button" class="egg-btn-exit ghost" id="eggBtnExit">退出</button></div></div>`;
+  const vid = quizBodyEl.querySelector("video");
+  if (vid) vid.play().catch(() => {});
+  const nextBtn = document.getElementById("eggBtnNext");
+  const exitBtn = document.getElementById("eggBtnExit");
+  if (nextBtn) nextBtn.addEventListener("click", () => showEggTitlePicker());
+  if (exitBtn) exitBtn.addEventListener("click", () => quizModalEl && quizModalEl.close());
 }
 
-function getQuizAnswer() {
-  const q = quizQuestions[quizIndex];
-  if (q.type === "choice") {
-    const checked = quizBodyEl.querySelector('input[name="quizOption"]:checked');
-    return checked ? checked.value : "";
-  }
-  const field = document.getElementById("quizTextAnswer");
-  return field ? String(field.value || "").trim() : "";
-}
-
-function startQuizSession() {
-  quizIndex = 0;
+function showEggSurpriseFromAccess() {
+  if (quizAccessModalEl && quizAccessModalEl.open) quizAccessModalEl.close();
   quizAnswersForBlessing = [];
-  quizSubmitBtnEl.disabled = false;
-  renderQuizQuestion();
-  quizModalEl.showModal();
-}
-
-function showLoveIntroThenStartQuiz() {
-  if (quizAccessModalEl.open) quizAccessModalEl.close();
-  const popup = document.createElement("dialog");
-  popup.style.border = "0";
-  popup.style.padding = "0";
-  popup.style.background = "transparent";
-  popup.innerHTML = `
-    <div style="background:rgba(18,22,28,0.94);color:#fff;padding:28px 24px;border-radius:14px;max-width:88vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.25);">
-      <div style="font-size:48px;line-height:1.1;margin-bottom:12px;">🫶</div>
-      <div style="font-size:18px;font-weight:700;margin-bottom:10px;letter-spacing:0.02em;">我们也爱你！</div>
-      <div style="font-size:13px;opacity:0.88;line-height:1.55;">接下来就玩几道小题，答完有小惊喜～</div>
-    </div>
-  `;
-  document.body.appendChild(popup);
-  popup.showModal();
-  setTimeout(() => {
-    if (popup.open) popup.close();
-    popup.remove();
-    startQuizSession();
-  }, 3200);
+  if (quizSubmitBtnEl) quizSubmitBtnEl.disabled = true;
+  if (quizActionRowEl) quizActionRowEl.classList.add("hidden");
+  eggFlowActive = true;
+  if (quizModalEl) quizModalEl.showModal();
+  showEggTitlePicker();
 }
 
 function showBlessingLinesThenMeteorRain() {
   const lines = [
-    "我们邀请刘恋，一起祝福恋恋。",
-    "祝她好好吃饭。",
-    "好好睡觉。",
-    "好好享受爱与被爱。",
-    "好好创作。",
-    "相信好好的就会[好好的]。",
-    "相信好好的就会[会好的]。",
-    "我们爱你！",
-    "生日快乐恋恋♥",
+    "今天我们齐聚在这里",
+    "是想一起祝福刘恋",
+    "祝她好好吃饭",
+    "好好睡觉",
+    "好好享受爱与被爱",
+    "好好创作",
+    "相信好好的就会「好好的」",
+    "相信好好的就会「会好的」",
+    "我们爱你",
+    "恋姐生日快乐",
   ];
   window.setTimeout(() => {
     const dlg = document.createElement("dialog");
@@ -531,8 +936,6 @@ function getBlessingTextsFromContent() {
   for (const item of contentMap.values()) {
     const t = String(item.text || "").trim();
     if (t.length > 0 && t.length <= 120) raw.push(t);
-    const title = String(item.title || "").trim();
-    if (title.length > 0 && title.length <= 60 && title !== t) raw.push(title);
   }
   const uniq = [...new Set(raw)];
   if (uniq.length === 0) {
@@ -717,136 +1120,6 @@ function startBlessingSidesShower(durationMs, songMedia, songControl) {
   }, 110);
 }
 
-function afterGiftContinue() {
-  if (quizModalEl.open) quizModalEl.close();
-  unlockBlessingExport();
-  primeBlessingWebAudio();
-  showBlessingLinesThenMeteorRain();
-}
-
-function unlockSurprise() {
-  quizTitleEl.textContent = "🎉 解锁成功";
-  quizBodyEl.innerHTML = `
-    <div class="quiz-unlock-wrap">
-      <p class="quiz-unlock-celebrate">你棒棒！</p>
-    </div>
-  `;
-  quizSubmitBtnEl.disabled = true;
-  quizActionRowEl.classList.add("hidden");
-  launchFireworks();
-  setTimeout(() => {
-    quizBodyEl.innerHTML = `
-      <p>恭喜全部答对，惊喜视频已解锁：</p>
-      <video id="surpriseVideo" controls autoplay playsinline style="width:100%;border-radius:8px;" src="${SURPRISE_VIDEO_URL}"></video>
-      <div class="controls" style="margin-top:10px;">
-        <button id="quizAfterGiftBtn" type="button">我看完视频啦，继续</button>
-      </div>
-    `;
-    const video = document.getElementById("surpriseVideo");
-    if (video) video.play().catch(() => {});
-    const afterBtn = document.getElementById("quizAfterGiftBtn");
-    if (afterBtn) {
-      afterBtn.addEventListener("click", afterGiftContinue);
-    }
-  }, 2500);
-}
-
-function submitQuiz() {
-  const q = quizQuestions[quizIndex];
-  const answer = getQuizAnswer();
-  const pass = q.check(answer, q);
-  quizAttemptCount += 1;
-  pushQuizLog({
-    at: new Date().toISOString(),
-    attemptNo: quizAttemptCount,
-    questionNo: quizIndex + 1,
-    prompt: q.prompt,
-    answer,
-    pass,
-  });
-  if (!pass) {
-    const fb = document.getElementById("quizInlineFeedback");
-    if (fb) {
-      fb.className = "quiz-inline-feedback quiz-inline-feedback--hint";
-      const emptyText = q.type === "text" && String(answer || "").trim() === "";
-      fb.textContent = emptyText
-        ? "答案未设置留存，请放心自由地回答哦~"
-        : "这里只有你看见，随便留点什么、给自己鼓鼓劲就好～一个字或一个表情也行。";
-    }
-    quizSubmitBtnEl.disabled = true;
-    quizFeedbackTimer = setTimeout(() => {
-      quizSubmitBtnEl.disabled = false;
-      renderQuizQuestion();
-    }, 2000);
-    return;
-  }
-  {
-    const fb = document.getElementById("quizInlineFeedback");
-    if (fb) {
-      fb.className = "quiz-inline-feedback";
-      fb.textContent = q.feedback;
-    }
-  }
-  const clipped = clipBlessingSideText(answer);
-  if (clipped.length > 0) quizAnswersForBlessing.push(clipped);
-  quizSubmitBtnEl.disabled = true;
-  if (quizIndex === quizQuestions.length - 1) {
-    quizFeedbackTimer = setTimeout(() => {
-      quizSubmitBtnEl.disabled = false;
-      unlockSurprise();
-    }, 2000);
-  } else {
-    quizFeedbackTimer = setTimeout(() => {
-      quizSubmitBtnEl.disabled = false;
-      quizIndex += 1;
-      renderQuizQuestion();
-    }, 2000);
-  }
-}
-
-function launchFireworks() {
-  const layer = document.createElement("div");
-  layer.className = "fireworks-layer";
-  quizBodyEl.appendChild(layer);
-  const colors = ["#ff6b6b", "#ffd166", "#06d6a0", "#118ab2", "#ef476f", "#c7a86b"];
-  const bursts = 8;
-  for (let b = 0; b < bursts; b++) {
-    const cx = 20 + Math.random() * 60;
-    const cy = 18 + Math.random() * 52;
-    for (let i = 0; i < 16; i++) {
-      const s = document.createElement("span");
-      s.className = "spark";
-      const angle = (Math.PI * 2 * i) / 16;
-      const dist = 24 + Math.random() * 30;
-      s.style.left = `${cx}%`;
-      s.style.top = `${cy}%`;
-      s.style.background = colors[(i + b) % colors.length];
-      s.style.setProperty("--dx", `${Math.cos(angle) * dist}px`);
-      s.style.setProperty("--dy", `${Math.sin(angle) * dist}px`);
-      s.style.animationDelay = `${b * 120}ms`;
-      layer.appendChild(s);
-    }
-  }
-  setTimeout(() => layer.remove(), 2200);
-}
-
-function exportQuizLog() {
-  const logs = getQuizLog();
-  const payload = {
-    exportedAt: new Date().toISOString(),
-    totalAttempts: logs.length,
-    records: logs,
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "quiz-log.json";
-  a.click();
-  URL.revokeObjectURL(url);
-  setAdminStatus(`已导出答题记录，共 ${logs.length} 条。`);
-}
-
 function showTimedPopup(message, duration = 5000) {
   const popup = document.createElement("dialog");
   popup.style.border = "0";
@@ -871,7 +1144,6 @@ async function loadData() {
     try {
       applyData(JSON.parse(local));
       renderGrid();
-      loadStatusEl.textContent = "";
       return;
     } catch {
       localStorage.removeItem(LOCAL_KEY);
@@ -881,23 +1153,26 @@ async function loadData() {
     const res = await fetch("./data.json", { cache: "no-store" });
     if (!res.ok) throw new Error("data.json missing");
     applyData(await res.json());
-    loadStatusEl.textContent = "已读取 data.json 最新内容。";
   } catch {
     applyData({
       heroImage: fallbackHero,
       items: {
-        "0001": { type: "text", title: "生日快乐", text: "愿你平安喜乐，万事顺心。" },
-        "0007": { type: "image", title: "粉丝手绘", text: "示例图片祝福", url: "https://picsum.photos/seed/bday-a/960/1200" },
+        "0001": { type: "text", text: "愿你平安喜乐，万事顺心。（演示：无图时用灰色占位，不请求外网。）" },
       },
     });
-    loadStatusEl.textContent = "读取 data.json 失败，当前显示演示数据。";
   }
   renderGrid();
 }
 
+/** 须先于其它 addEventListener：若后面任一处抛错，仍能保证生日门已绑定 */
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initBirthdayGate, { once: true });
+} else {
+  initBirthdayGate();
+}
+
 openBtnEl.addEventListener("click", () => openById(codeInputEl.value));
 randomBtnEl.addEventListener("click", () => openById(nextSequentialBlessingId()));
-exportBlessingsBtnEl.addEventListener("click", exportAllBlessings);
 jumpBtnEl.addEventListener("click", () => openById(jumpInputEl.value));
 prevBlessingBtnEl.addEventListener("click", () => gotoNeighborBlessing(-1));
 nextBlessingBtnEl.addEventListener("click", () => gotoNeighborBlessing(1));
@@ -911,16 +1186,7 @@ jumpInputEl.addEventListener("keydown", (e) => {
 });
 
 if (adminKickerBtnEl) {
-  adminKickerBtnEl.addEventListener("click", () => {
-    alert("这里是后台管理入口，非运营同学请返回主页哦～");
-    const pwd = prompt("请输入后台管理密码");
-    if (pwd !== ADMIN_PASSWORD) {
-      alert("密码错误。");
-      return;
-    }
-    adminModalEl.showModal();
-    setAdminStatus("已进入运营模式。");
-  });
+  adminKickerBtnEl.addEventListener("click", () => openAdminAfterPasswordPrompt());
 }
 
 csvFileEl.addEventListener("change", async (e) => {
@@ -937,6 +1203,98 @@ imageFileEl.addEventListener("change", async (e) => {
   setAdminStatus("底图已更新。");
 });
 
+function getBulkImageMode() {
+  const r = document.querySelector('input[name="bulkImageMode"]:checked');
+  return r && r.value === "dataurl" ? "dataurl" : "relative";
+}
+
+/** 与 CSV、批量选图一致：项目内内容文件夹名，如 content → ./content/0001.jpg */
+function getBulkContentSubdir() {
+  const el = document.getElementById("bulkContentFolder");
+  let s = el && String(el.value || "").trim();
+  if (!s) s = "content";
+  s = s.replace(/^[./\\]+/g, "").replace(/[/\\]+$/g, "").replace(/\\/g, "/");
+  if (!s || s.includes("..")) return "content";
+  return s;
+}
+
+if (bulkImageFilesEl) {
+  bulkImageFilesEl.addEventListener("change", async (e) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    const mode = getBulkImageMode();
+    revokeAllBulkPreviewUrls();
+    let ok = 0;
+    let skip = 0;
+    let bytesApprox = 0;
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) {
+        skip += 1;
+        continue;
+      }
+      const base = file.name.replace(/\.[^/.]+$/, "");
+      const id = normalizeId(base);
+      if (!id) {
+        skip += 1;
+        continue;
+      }
+      const extMatch = /\.([a-z0-9]+)$/i.exec(file.name);
+      const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : ".jpg";
+      if (mode === "relative") {
+        const sub = getBulkContentSubdir();
+        const persistPath = `./${sub}/${id}${ext}`;
+        /** 浏览器不会把「选择的文件」自动写到服务器/磁盘上的 media/，直接只用路径会导致 404；用 object URL 先在本页显示 */
+        const blobUrl = URL.createObjectURL(file);
+        bulkPreviewObjectUrls.add(blobUrl);
+        contentMap.set(
+          id,
+          normalizeBlessingItem(id, {
+            type: "image",
+            title: "",
+            text: "",
+            url: persistPath,
+            imageUrl: blobUrl,
+            persistedPath: persistPath,
+          })
+        );
+        ok += 1;
+      } else {
+        const dataUrl = await fileToDataUrl(file);
+        bytesApprox += dataUrl.length;
+        contentMap.set(
+          id,
+          normalizeBlessingItem(id, {
+            type: "image",
+            title: "",
+            text: "",
+            url: dataUrl,
+            imageUrl: dataUrl,
+          })
+        );
+        ok += 1;
+      }
+    }
+    renderGrid();
+    if (ok === 0) {
+      alert(
+        "没有成功导入任何图片。请检查：① 是否为图片文件；② 文件名是否对应 0001–1000（如 0001.jpg、42.png）。纯中文或过长数字的文件名会无法识别编号。"
+      );
+    }
+    if (mode === "dataurl") {
+      const mb = bytesApprox / (1024 * 1024);
+      setAdminStatus(
+        `已嵌入 ${ok} 张为 Base64，跳过 ${skip} 个。约 ${mb.toFixed(1)} MB；体积过大时请改用「仅登记路径」+ 内容文件夹。`
+      );
+    } else {
+      const sub = getBulkContentSubdir();
+      setAdminStatus(
+        `已处理 ${ok} 张：本页已预览；data.json 中为 ./${sub}/ 路径。部署时请把「${sub}」文件夹与网页放在同一目录。跳过 ${skip} 个。`
+      );
+    }
+    e.target.value = "";
+  });
+}
+
 dataFileEl.addEventListener("change", async (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
@@ -946,7 +1304,6 @@ dataFileEl.addEventListener("change", async (e) => {
     applyData(json);
     renderGrid();
     setAdminStatus("data.json 导入成功，当前页面已更新。");
-    loadStatusEl.textContent = "当前显示导入的数据（尚未保存到浏览器）。";
   } catch {
     setAdminStatus("data.json 导入失败，请确认文件格式。");
   }
@@ -955,17 +1312,6 @@ dataFileEl.addEventListener("change", async (e) => {
 saveLocalBtnEl.addEventListener("click", saveToLocal);
 downloadDataBtnEl.addEventListener("click", downloadData);
 clearLocalBtnEl.addEventListener("click", clearLocal);
-exportQuizLogBtnEl.addEventListener("click", exportQuizLog);
-
-quizSubmitBtnEl.addEventListener("click", submitQuiz);
-
-if (quizFormEl) {
-  quizFormEl.addEventListener("submit", (e) => {
-    e.preventDefault();
-    if (quizSubmitBtnEl.disabled) return;
-    submitQuiz();
-  });
-}
 
 if (quizModalCloseBtnEl) {
   quizModalCloseBtnEl.addEventListener("click", () => {
@@ -973,10 +1319,12 @@ if (quizModalCloseBtnEl) {
   });
 }
 
-quizEntryBtnEl.addEventListener("click", () => {
-  primeBlessingWebAudio();
-  quizAccessModalEl.showModal();
-});
+if (quizEntryBtnEl && quizAccessModalEl) {
+  quizEntryBtnEl.addEventListener("click", () => {
+    primeBlessingWebAudio();
+    quizAccessModalEl.showModal();
+  });
+}
 
 if (quizAccessCloseBtnEl) {
   quizAccessCloseBtnEl.addEventListener("click", () => {
@@ -986,7 +1334,7 @@ if (quizAccessCloseBtnEl) {
 
 if (quizLoveBtnEl) {
   quizLoveBtnEl.addEventListener("click", () => {
-    showLoveIntroThenStartQuiz();
+    showEggSurpriseFromAccess();
   });
 }
 
@@ -1004,9 +1352,387 @@ if (quizNopeBtnEl) {
 }
 
 quizModalEl.addEventListener("close", () => {
-  if (quizModalEl.returnValue === "cancel") {
-    launchFireworks();
+  if (eggFlowActive) {
+    eggFlowActive = false;
+    primeBlessingWebAudio();
+    showBlessingLinesThenMeteorRain();
   }
 });
 
+function initCanvasPanZoom() {
+  const wrap = canvasWrapEl;
+  const stage = canvasStageEl;
+  if (!wrap || !stage) return;
+
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  /** 最小为 1：完整呈现主视图，不可再缩小 */
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 5;
+  /** 格子内容透明度：完整主图（最小缩放）约 3%，随放大线性增至最大缩放 100% */
+  const GRID_BLEND_MIN = 0.03;
+  const GRID_BLEND_MAX = 1;
+  const PAN_THRESHOLD = 6;
+
+  function clampPan() {
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
+    if (!w || !h) return;
+    const minTx = w - w * scale;
+    const minTy = h - h * scale;
+    tx = Math.min(0, Math.max(minTx, tx));
+    ty = Math.min(0, Math.max(minTy, ty));
+  }
+
+  function applyCanvasView() {
+    clampPan();
+    stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale}) translateZ(0)`;
+    const t = (scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE);
+    const u = Math.min(1, Math.max(0, t));
+    const gridBlend = GRID_BLEND_MIN + (GRID_BLEND_MAX - GRID_BLEND_MIN) * u;
+    wrap.style.setProperty("--grid-blend", gridBlend.toFixed(4));
+    if (scale <= MIN_SCALE + 1e-6) {
+      wrap.dataset.canvasZoom = "fit";
+    } else {
+      wrap.dataset.canvasZoom = "in";
+    }
+  }
+
+  function clampScale(s) {
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  }
+
+  function resetCanvasView() {
+    scale = 1;
+    tx = 0;
+    ty = 0;
+    skipClick = false;
+    applyCanvasView();
+  }
+
+  const ro = new ResizeObserver(() => {
+    applyCanvasView();
+  });
+  ro.observe(wrap);
+
+  let skipClick = false;
+  /** idle | tracking（未超过阈值）| dragging（平移中） */
+  let panState = "idle";
+  let panStart = { x: 0, y: 0, tx: 0, ty: 0 };
+  let activePointerId = null;
+  /** iOS / 现代浏览器：触摸走 Pointer Events，双指捏合必须用指针坐标跟踪（仅靠 touch* 在 Safari 上常不触发） */
+  const activePointers = new Map();
+  let pinchActive = false;
+  let pinchBaseDist = 0;
+  let pinchBaseScale = 1;
+
+  /** iPhone/iPad：Pointer 双指捏合经常不完整；Touch 事件 + 禁用 gesture 才是可靠路径 */
+  let touchPinchActive = false;
+  let touchPinchBaseDist = 0;
+  let touchPinchBaseScale = 1;
+
+  function pointerDist() {
+    if (activePointers.size < 2) return 0;
+    const pts = [...activePointers.values()];
+    const a = pts[0];
+    const b = pts[1];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function touchSpan(tl) {
+    return Math.hypot(tl[0].clientX - tl[1].clientX, tl[0].clientY - tl[1].clientY);
+  }
+
+  function applyTouchPinch(tl) {
+    const d = Math.max(touchSpan(tl), 1e-3);
+    const newScale = clampScale(touchPinchBaseScale * (d / touchPinchBaseDist));
+    const rect = wrap.getBoundingClientRect();
+    const mx = (tl[0].clientX + tl[1].clientX) / 2 - rect.left;
+    const my = (tl[0].clientY + tl[1].clientY) / 2 - rect.top;
+    const wx = (mx - tx) / scale;
+    const wy = (my - ty) / scale;
+    tx = mx - wx * newScale;
+    ty = my - wy * newScale;
+    scale = newScale;
+    if (scale <= MIN_SCALE + 1e-6) {
+      tx = 0;
+      ty = 0;
+    }
+    applyCanvasView();
+  }
+
+  /** Safari：系统 pinch 会缩放整页并抢走手势；在画区禁止默认 gesture，改由 Touch 捏合驱动 */
+  if (typeof window.GestureEvent !== "undefined") {
+    wrap.addEventListener(
+      "gesturestart",
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    wrap.addEventListener(
+      "gesturechange",
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    wrap.addEventListener(
+      "gestureend",
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+  }
+
+  wrap.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length === 2) {
+        touchPinchActive = true;
+        pinchActive = false;
+        activePointers.clear();
+        touchPinchBaseDist = Math.max(touchSpan(e.touches), 1e-3);
+        touchPinchBaseScale = scale;
+        try {
+          e.preventDefault();
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    { passive: false, capture: true }
+  );
+
+  wrap.addEventListener(
+    "touchmove",
+    (e) => {
+      if (e.touches.length < 2) {
+        touchPinchActive = false;
+        return;
+      }
+      if (!touchPinchActive) {
+        touchPinchActive = true;
+        pinchActive = false;
+        activePointers.clear();
+        touchPinchBaseDist = Math.max(touchSpan(e.touches), 1e-3);
+        touchPinchBaseScale = scale;
+      }
+      try {
+        e.preventDefault();
+      } catch {
+        /* ignore */
+      }
+      applyTouchPinch(e.touches);
+    },
+    { passive: false, capture: true }
+  );
+
+  function endTouchPinchIfNeeded(e) {
+    if (e.touches.length < 2) touchPinchActive = false;
+  }
+  wrap.addEventListener("touchend", endTouchPinchIfNeeded, { capture: true });
+  wrap.addEventListener("touchcancel", endTouchPinchIfNeeded, { capture: true });
+
+  wrap.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let mult = 1;
+      if (e.deltaMode === 1) {
+        mult = Math.exp(-e.deltaY * 0.12);
+      } else if (e.deltaMode === 2) {
+        mult = e.deltaY < 0 ? 1.25 : 0.8;
+      } else {
+        mult = Math.exp(-e.deltaY * 0.0015);
+      }
+      const newScale = clampScale(scale * mult);
+      const wx = (mx - tx) / scale;
+      const wy = (my - ty) / scale;
+      tx = mx - wx * newScale;
+      ty = my - wy * newScale;
+      scale = newScale;
+      if (scale <= MIN_SCALE + 1e-6) {
+        tx = 0;
+        ty = 0;
+      }
+      applyCanvasView();
+    },
+    { passive: false }
+  );
+
+  wrap.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (touchPinchActive) return;
+      skipClick = false;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.size === 2) {
+        const d = Math.max(pointerDist(), 1e-3);
+        pinchBaseDist = d;
+        pinchBaseScale = scale;
+        pinchActive = true;
+        if (activePointerId != null) {
+          try {
+            wrap.releasePointerCapture(activePointerId);
+          } catch {
+            /* ignore */
+          }
+        }
+        panState = "idle";
+        activePointerId = null;
+        wrap.classList.remove("is-panning");
+        try {
+          e.preventDefault();
+        } catch {
+          /* ignore */
+        }
+        /** 双指落在格子上时，把两路指针抓到 wrap，避免移出格子后丢 move（尤其 WebKit） */
+        for (const pid of activePointers.keys()) {
+          try {
+            wrap.setPointerCapture(pid);
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+
+      if (scale <= MIN_SCALE + 1e-6) return;
+      if (panState !== "idle") return;
+      panState = "tracking";
+      activePointerId = e.pointerId;
+      panStart = { x: e.clientX, y: e.clientY, tx, ty };
+    },
+    { passive: false }
+  );
+
+  wrap.addEventListener(
+    "pointermove",
+    (e) => {
+      if (touchPinchActive) return;
+      if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+
+      if (pinchActive && activePointers.size === 2) {
+        try {
+          e.preventDefault();
+        } catch {
+          /* ignore */
+        }
+        const d = Math.max(pointerDist(), 1e-3);
+        const newScale = clampScale(pinchBaseScale * (d / pinchBaseDist));
+        const rect = wrap.getBoundingClientRect();
+        const pts = [...activePointers.values()];
+        const mx = (pts[0].x + pts[1].x) / 2 - rect.left;
+        const my = (pts[0].y + pts[1].y) / 2 - rect.top;
+        const wx = (mx - tx) / scale;
+        const wy = (my - ty) / scale;
+        tx = mx - wx * newScale;
+        ty = my - wy * newScale;
+        scale = newScale;
+        if (scale <= MIN_SCALE + 1e-6) {
+          tx = 0;
+          ty = 0;
+        }
+        applyCanvasView();
+        return;
+      }
+
+      if (panState === "idle" || e.pointerId !== activePointerId) return;
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      if (panState === "tracking") {
+        if (Math.abs(dx) <= PAN_THRESHOLD && Math.abs(dy) <= PAN_THRESHOLD) return;
+        panState = "dragging";
+        wrap.classList.add("is-panning");
+        try {
+          wrap.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (panState === "dragging") {
+        tx = panStart.tx + dx;
+        ty = panStart.ty + dy;
+        applyCanvasView();
+      }
+    },
+    { passive: false }
+  );
+
+  function endPan(e) {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) {
+      pinchActive = false;
+      pinchBaseDist = 0;
+    }
+
+    if (e.pointerId !== activePointerId) return;
+    const wasDragging = panState === "dragging";
+    if (wasDragging) {
+      try {
+        wrap.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      skipClick = true;
+    }
+    panState = "idle";
+    activePointerId = null;
+    wrap.classList.remove("is-panning");
+  }
+
+  wrap.addEventListener("pointerup", endPan);
+  wrap.addEventListener("pointercancel", endPan);
+  wrap.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse") return;
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinchActive = false;
+  });
+
+  wrap.addEventListener(
+    "click",
+    (e) => {
+      if (!skipClick) return;
+      if (!e.target.closest(".cell")) {
+        skipClick = false;
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      skipClick = false;
+    },
+    true
+  );
+
+  if (canvasResetBtnEl) {
+    canvasResetBtnEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      resetCanvasView();
+    });
+  }
+
+  applyCanvasView();
+}
+
+initCanvasPanZoom();
 loadData();
+
+/** 首帧后再挂一次自动进入定时，避免个别环境下首轮 setTimeout 与布局竞态；会清掉首轮并重新计 5 秒 */
+requestAnimationFrame(() => {
+  try {
+    if (localStorage.getItem(CEREMONY_STORAGE_KEY) === "1") return;
+  } catch {
+    return;
+  }
+  scheduleBirthdayGateAutoEnter();
+});
