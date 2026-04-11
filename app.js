@@ -214,7 +214,7 @@ const fallbackHero = HERO_PLACEHOLDER_IMAGE;
 /** 与 CSV / 运营约定一致：格子配图默认文件名 */
 const CONTENT_MEDIA_DIR = "./content";
 /** 格用小图子目录（相对 content/）；与 `generate-content-thumbs.mjs --out=...` 一致；弹窗大图仍用 `imageUrl` */
-const CONTENT_THUMB_SUBDIR = "thumbs512";
+const CONTENT_THUMB_SUBDIR = "thumbs384";
 /** 小图扩展名尝试顺序（与生成脚本默认 webp 一致） */
 const CONTENT_THUMB_EXTS = ["webp", "jpg", "jpeg", "png"];
 

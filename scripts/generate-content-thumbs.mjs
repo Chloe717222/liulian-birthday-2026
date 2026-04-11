@@ -1,11 +1,11 @@
 /**
- * 从 content/ 下四位编号原图批量生成 content/<子目录>/{id}.webp（默认子目录 thumbs512、长边 512）。
- * 与 app.js 中 CONTENT_THUMB_SUBDIR 一致；弹窗仍用原图 imageUrl。
+ * 从 content/ 下四位编号原图批量生成 content/<子目录>/{id}.webp（默认子目录 thumbs384、长边 384，体积小加载快）。
+ * 与 app.js 中 CONTENT_THUMB_SUBDIR 一致；弹窗仍用原图 imageUrl。需要更清晰可用 512 + --out=thumbs512 并改 CONTENT_THUMB_SUBDIR。
  *
  * 用法（在仓库根或 scripts 目录均可）：
  *   cd scripts && npm install && node generate-content-thumbs.mjs ../content
- *   node generate-content-thumbs.mjs ./content 384 --out=thumbs   # 更小、写到 content/thumbs/
- *   node generate-content-thumbs.mjs ./content 512 --force       # 同目录覆盖（部分环境可能 EPERM，可改 --out=thumbs512_new）
+ *   node generate-content-thumbs.mjs ./content 512 --out=thumbs512  # 更清晰、文件更大
+ *   node generate-content-thumbs.mjs ./content 384 --force           # 同目录覆盖（EPERM 时可改 --out=thumbs384b）
  */
 import fs from "fs";
 import path from "path";
@@ -15,9 +15,9 @@ const ID_RE = /^(\d{4})\.(jpe?g|png|webp|gif|bmp)$/i;
 
 function parseThumbOutSubdir(argv) {
   const raw = argv.find((a) => a.startsWith("--out="));
-  let s = raw ? String(raw.slice(6)).trim() : "thumbs512";
+  let s = raw ? String(raw.slice(6)).trim() : "thumbs384";
   if (!/^[a-zA-Z0-9_-]{1,48}$/.test(s)) {
-    console.error("--out= 仅允许字母数字下划线连字符，例如 --out=thumbs512");
+    console.error("--out= 仅允许字母数字下划线连字符，例如 --out=thumbs384");
     process.exit(1);
   }
   return s;
@@ -30,11 +30,11 @@ async function main() {
   const argvPos = all.filter((a) => a !== "--force" && !a.startsWith("--out="));
   const contentDir = path.resolve(argvPos[0] || "content");
   const numArg = argvPos.find((a) => /^\d+$/.test(a));
-  const maxSide = Math.min(2048, Math.max(64, Number(numArg) || 512));
+  const maxSide = Math.min(2048, Math.max(64, Number(numArg) || 384));
 
   if (!fs.existsSync(contentDir) || !fs.statSync(contentDir).isDirectory()) {
     console.error(
-      "用法: node generate-content-thumbs.mjs <content 目录路径> [长边像素，默认512] [--force] [--out=thumbs]"
+      "用法: node generate-content-thumbs.mjs <content 目录路径> [长边像素，默认384] [--force] [--out=thumbs384]"
     );
     process.exit(1);
   }
@@ -74,7 +74,7 @@ async function main() {
           fit: "inside",
           withoutEnlargement: true,
         })
-        .webp({ quality: 82, effort: 4 })
+        .webp({ quality: 78, effort: 4 })
         .toFile(dest);
       ok += 1;
       if (ok % 100 === 0) console.error(`…已写 ${ok} 张`);
