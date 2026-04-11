@@ -18,6 +18,12 @@ const MOSAIC_IDS_CENTER_FIRST = (function buildMosaicIdsCenterFirst() {
 })();
 const ADMIN_PASSWORD = "LIULIAN20260426";
 const LOCAL_KEY = "lianlian-bday-data-v1";
+/**
+ * 发版时改此字符串可让访客重新经历「仪式相关」状态（生日门、彩蛋后导出等），不删本机 `LOCAL_KEY`。
+ * 若清掉 LOCAL_KEY，一旦本次 `data.json` 拉取失败，祝福主视图会只剩演示稿甚至空白——不可接受。
+ */
+const SITE_DEPLOY_REVISION = "2026-04-12";
+const SITE_REVISION_LS_KEY = "lianlian-site-deploy-revision-v1";
 /** 彩蛋视频示例路径：与格子一样放在 content/，可自行替换文件 */
 const SURPRISE_VIDEO_URL = "./content/surprise.mp4";
 /** 主视图两侧祝福字幕飘起时的 BGM（彩蛋流程结束后与 `startBlessingSidesShower` 同步） */
@@ -52,8 +58,6 @@ const blessingImageViewerStageEl = document.getElementById("blessingImageViewerS
 const blessingImageViewerTransformEl = document.getElementById("blessingImageViewerTransform");
 const blessingImageViewerImgEl = document.getElementById("blessingImageViewerImg");
 const blessingImageViewerCloseBtnEl = document.getElementById("blessingImageViewerCloseBtn");
-const blessingImageViewerSaveBtnEl = document.getElementById("blessingImageViewerSaveBtn");
-const blessingSaveBarEl = document.getElementById("blessingSaveBar");
 const exportBlessingsTextBtnEl = document.getElementById("exportBlessingsTextBtn");
 const prevBlessingBtnEl = document.getElementById("prevBlessingBtn");
 const nextBlessingBtnEl = document.getElementById("nextBlessingBtn");
@@ -833,7 +837,10 @@ function renderBlessingModal(item, cellId) {
     const audio = document.createElement("audio");
     audio.className = "blessing-modal-audio";
     audio.controls = true;
-    audio.preload = "none";
+    audio.preload = "metadata";
+    audio.playsInline = true;
+    audio.setAttribute("playsinline", "");
+    audio.setAttribute("webkit-playsinline", "");
     audio.src = audioSrc;
     bindAudioContentFallback(audio, cellId);
     attachBlessingModalMediaBgmDuck(audio);
@@ -845,6 +852,8 @@ function renderBlessingModal(item, cellId) {
     video.className = "blessing-modal-video";
     video.controls = true;
     video.playsInline = true;
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
     video.preload = "metadata";
     video.src = videoSrc;
     bindVideoContentFallback(video, cellId);
@@ -853,47 +862,6 @@ function renderBlessingModal(item, cellId) {
   }
 
   return wrap;
-}
-
-function clearBlessingSaveBar() {
-  if (!blessingSaveBarEl) return;
-  blessingSaveBarEl.innerHTML = "";
-}
-
-/**
- * 与底部「跳转 / 上一条 / 下一条」同一行：按类型展示「保存视频/音频/图片到本地」。
- */
-function syncBlessingSaveBar(item, cellId) {
-  if (!blessingSaveBarEl) return;
-  clearBlessingSaveBar();
-  const audioSrc = String(item.audioUrl || "").trim();
-  const videoSrc = String(item.videoUrl || "").trim();
-  const addSaveBtn = (label, url, fallbackFilename) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "blessing-nav-save-btn";
-    b.textContent = label;
-    b.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      void saveMediaUrlToLocalFile(url, fallbackFilename);
-    });
-    blessingSaveBarEl.appendChild(b);
-  };
-  if (videoSrc) addSaveBtn("保存视频到本地", videoSrc, `blessing_${cellId}_video.mp4`);
-  if (audioSrc) addSaveBtn("保存音频到本地", audioSrc, `blessing_${cellId}_audio.mp3`);
-  if (!videoSrc && !audioSrc) {
-    const imgUrl = blessingImageSrc(item, cellId);
-    if (!isGridPlaceholderImageSrc(imgUrl)) {
-      addSaveBtn("保存图片到本地", imgUrl, `blessing_${cellId}_image.jpg`);
-    }
-  }
-  if (!blessingSaveBarEl.childElementCount) {
-    const empty = document.createElement("span");
-    empty.className = "blessing-nav-save-empty";
-    empty.textContent = "暂无可保存";
-    blessingSaveBarEl.appendChild(empty);
-  }
 }
 
 /** 祝福弹窗配图全屏查看：双指缩放、拖动；桌面 Ctrl+滚轮缩放 */
@@ -1038,19 +1006,11 @@ function initBlessingImageViewer() {
     blessingImageViewerCloseBtnEl.addEventListener("click", () => closeBlessingImageViewer());
   }
 
-  if (blessingImageViewerSaveBtnEl && blessingImageViewerImgEl) {
-    blessingImageViewerSaveBtnEl.addEventListener("click", () => {
-      const src = String(blessingImageViewerImgEl.currentSrc || blessingImageViewerImgEl.src || "").trim();
-      void saveMediaUrlToLocalFile(src, "blessing_image.jpg");
-    });
-  }
-
   if (modalEl) {
     modalEl.addEventListener("close", () => {
       pauseBlessingModalEmbeddedMedia();
       syncBlessingBgmWithModalEmbeddedMedia();
       closeBlessingImageViewer();
-      clearBlessingSaveBar();
     });
   }
 }
@@ -1128,10 +1088,8 @@ function openById(rawId) {
       url: fallbackGridImageUrl(),
     });
     modalBodyEl.appendChild(renderBlessingModal(placeholder, id));
-    syncBlessingSaveBar(placeholder, id);
   } else {
     modalBodyEl.appendChild(renderBlessingModal(item, id));
-    syncBlessingSaveBar(item, id);
   }
   if (!modalEl.open) modalEl.showModal();
 }
@@ -1835,6 +1793,10 @@ function syncBlessingBgmWithModalEmbeddedMedia() {
   else unduckBlessingSidesBgmFromModalMedia();
 }
 
+function scheduleBlessingModalBgmSync() {
+  window.setTimeout(() => syncBlessingBgmWithModalEmbeddedMedia(), 0);
+}
+
 function pauseBlessingModalEmbeddedMedia() {
   if (!modalBodyEl) return;
   modalBodyEl.querySelectorAll("video,audio").forEach((el) => {
@@ -1846,14 +1808,15 @@ function pauseBlessingModalEmbeddedMedia() {
 
 function attachBlessingModalMediaBgmDuck(el) {
   if (!(el instanceof HTMLMediaElement)) return;
+  /** iOS/WebKit：在 `play` 同步栈里对另一轨 `<audio>` 执行 pause 可能打断当前轨起播，故延后一帧再 duck */
   el.addEventListener("play", () => {
-    syncBlessingBgmWithModalEmbeddedMedia();
+    scheduleBlessingModalBgmSync();
   });
   el.addEventListener("pause", () => {
-    window.setTimeout(() => syncBlessingBgmWithModalEmbeddedMedia(), 0);
+    scheduleBlessingModalBgmSync();
   });
   el.addEventListener("ended", () => {
-    window.setTimeout(() => syncBlessingBgmWithModalEmbeddedMedia(), 0);
+    scheduleBlessingModalBgmSync();
   });
 }
 
@@ -2245,7 +2208,20 @@ function showTimedPopup(message, duration = 5000) {
   }, duration);
 }
 
+function applySiteDeployRevisionGate() {
+  try {
+    const prev = localStorage.getItem(SITE_REVISION_LS_KEY);
+    if (prev === SITE_DEPLOY_REVISION) return;
+    localStorage.removeItem(CEREMONY_STORAGE_KEY);
+    localStorage.removeItem(EXPORT_BLESSINGS_AFTER_EGG_KEY);
+    localStorage.setItem(SITE_REVISION_LS_KEY, SITE_DEPLOY_REVISION);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function loadData() {
+  applySiteDeployRevisionGate();
   /**
    * 线上必须以同目录 `data.json` 为准。
    * 若先读 localStorage，曾「保存到当前浏览器」的设备会一直看到旧稿；且浏览器/CDN 可能强缓存同名 JSON。
