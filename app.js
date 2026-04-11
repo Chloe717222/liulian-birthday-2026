@@ -1647,6 +1647,17 @@ function onBirthdayGateDelegatedClick(e) {
   });
 }
 
+function revealBlessingPageAfterCeremony() {
+  document.documentElement.classList.remove(BIRTHDAY_GATE_BOOT_HTML_CLASS);
+  const gate = getBirthdayGateEl();
+  if (gate) {
+    gate.setAttribute("hidden", "");
+    gate.setAttribute("aria-hidden", "true");
+  }
+  document.body.style.overflow = "";
+  updateExportBlessingsTextButton();
+}
+
 function completeCandleCeremony() {
   clearBirthdayGateAutoEnterTimer();
   const gate = getBirthdayGateEl();
@@ -1659,6 +1670,10 @@ function completeCandleCeremony() {
   gate.classList.remove("birthday-gate--out");
   /** 勿在此处 `resetBirthdayGateCandles`：会立刻去掉 `is-blown`，用户看不到烛火熄灭过渡 */
   syncBirthdayGateVisibility();
+  /** 隐私模式 / 部分 WebView：sessionStorage 写入失败时 sync 仍认为「未完成」，主区会一直被 CSS 藏住 */
+  if (getFlowFlag(CEREMONY_STORAGE_KEY) !== "1") {
+    revealBlessingPageAfterCeremony();
+  }
 }
 
 function initBirthdayGate(options = {}) {
@@ -2343,11 +2358,24 @@ function getBlessingSidesBgmAudioEl() {
   a.preload = "auto";
   a.playsInline = true;
   a.setAttribute("playsinline", "");
+  a.setAttribute("webkit-playsinline", "");
   a.style.display = "none";
   a.setAttribute("aria-hidden", "true");
   document.body.appendChild(a);
   blessingSidesBgmAudio = a;
   return a;
+}
+
+/** 避免重复 `a.src = 同 URL` 触发重新加载，抵消 `warmBlessingSidesBgmFromUserGesture` 在 iOS 上的解锁 */
+function blessingSidesBgmAudioSrcIsSet(a) {
+  if (!(a instanceof HTMLAudioElement)) return false;
+  try {
+    const want = new URL(BLESSING_SIDES_BGM_URL, window.location.href).href;
+    const cur = String(a.currentSrc || a.src || "").trim();
+    return cur === want || cur.endsWith("happybirthday.aac");
+  } catch {
+    return String(a.src || "").includes("happybirthday");
+  }
 }
 
 /**
@@ -2406,6 +2434,12 @@ function primeBlessingWebAudio() {
  */
 function startBlessingSidesBgmPlayback() {
   primeBlessingWebAudio();
+  try {
+    const ctx = blessingAudioCtx;
+    if (ctx && ctx.state === "suspended") void ctx.resume();
+  } catch {
+    /* ignore */
+  }
   blessingBgmModalDuck = null;
   blessingBgmRuntime = null;
   void runBlessingBgmPlaybackCore().catch(() => {});
@@ -2420,7 +2454,21 @@ async function runBlessingBgmPlaybackCore() {
   const tryHtmlAudioBgm = async () => {
     const a = getBlessingSidesBgmAudioEl();
     try {
-      a.src = BLESSING_SIDES_BGM_URL;
+      if (!blessingSidesBgmAudioSrcIsSet(a)) {
+        a.src = BLESSING_SIDES_BGM_URL;
+      }
+      a.volume = 0.0001;
+      a.loop = false;
+      /**
+       * iOS / 移动 Safari：若在 `await` 元数据之后再 `play()`，用户激活已过期，会静默失败。
+       * 须先 `play()`（与关彩蛋弹窗的手势同一同步链尽量紧），再补等元数据用于时长。
+       */
+      const playP = a.play();
+      if (playP) {
+        await playP.catch(() => {
+          throw new Error("bgm play blocked");
+        });
+      }
       await new Promise((resolve) => {
         const fin = () => resolve();
         if (a.readyState >= 1 && Number.isFinite(a.duration) && a.duration > 0) fin();
@@ -2429,12 +2477,6 @@ async function runBlessingBgmPlaybackCore() {
           a.addEventListener("error", fin, { once: true });
           setTimeout(fin, 1500);
         }
-      });
-      a.volume = 0.0001;
-      a.loop = false;
-      const playP = a.play();
-      if (playP) await playP.catch(() => {
-        throw new Error("bgm play blocked");
       });
       const singleSec = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : 45;
       const singleMs = singleSec * 1000;

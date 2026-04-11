@@ -681,12 +681,10 @@ button.ghost {
 }
 
 /**
- * 首屏 FOUC：与 index 内联一律加 `birthday-gate-boot` 配合（不按仪式是否完成区分是否加 class）。
- * 先藏祝福主区、再亮开屏层；`app.js` 同步门状态后移除 class。
+ * 首屏：`index` 内联加 `birthday-gate-boot`，用于 `#birthdayGate[hidden]` 在首帧仍按 flex 铺开（见下条）。
+ * 勿对 `.container` 使用 `visibility:hidden`：部分环境 sessionStorage 不可用会导致仪式完成后仍无法解除，
+ * 主区会一直不可见（白屏）。开屏层为 `position:fixed; z-index:10050` 已盖住主内容，无需再藏主区。
  */
-html.birthday-gate-boot .container {
-  visibility: hidden;
-}
 html.birthday-gate-boot #birthdayGate[hidden] {
   display: flex !important;
 }
