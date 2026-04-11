@@ -58,6 +58,7 @@ const blessingImageViewerStageEl = document.getElementById("blessingImageViewerS
 const blessingImageViewerTransformEl = document.getElementById("blessingImageViewerTransform");
 const blessingImageViewerImgEl = document.getElementById("blessingImageViewerImg");
 const blessingImageViewerCloseBtnEl = document.getElementById("blessingImageViewerCloseBtn");
+const blessingSaveBarEl = document.getElementById("blessingSaveBar");
 const exportBlessingsTextBtnEl = document.getElementById("exportBlessingsTextBtn");
 const prevBlessingBtnEl = document.getElementById("prevBlessingBtn");
 const nextBlessingBtnEl = document.getElementById("nextBlessingBtn");
@@ -120,12 +121,35 @@ function stripLegacyFlowFlagsFromLocalStorage() {
   }
 }
 stripLegacyFlowFlagsFromLocalStorage();
+
+/** 每次整页加载（含同一会话内 F5）重置开幕仪式与彩蛋导出状态，便于先看开屏、导出按钮需重新走完彩蛋。 */
+function resetCeremonyProgressForNewPageLoad() {
+  try {
+    sessionStorage.removeItem(CEREMONY_STORAGE_KEY);
+    sessionStorage.removeItem(EXPORT_BLESSINGS_AFTER_EGG_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+resetCeremonyProgressForNewPageLoad();
+
 /** 开幕页无操作则自动进入祝福页的等待时长（毫秒） */
 const BIRTHDAY_GATE_AUTO_MS = 8000;
+/**
+ * 与 styles.css 中 `.candle-mini__flame` 的 `transition` 时长（0.32s）一致。
+ * 标记 `is-blown` 后等满该时长再收开屏，保证「熄灭动效」播完再进祝福页；不依赖 WebView 上易丢的 `transitionend`。
+ */
+const CANDLE_FLAME_EXTINGUISH_MS = 320;
 
 function getBirthdayGateEl() {
   return document.getElementById("birthdayGate");
 }
+
+/** 与 index 内联脚本、styles 中 `html.birthday-gate-boot` 一致 */
+const BIRTHDAY_GATE_BOOT_HTML_CLASS = "birthday-gate-boot";
+
+/** 须在 loadData/renderGrid 之前执行，避免「先祝福页、再开屏」的竞态（尤其 DOMContentLoaded 晚于脚本尾部时） */
+syncBirthdayGateVisibility();
 
 let birthdayBlowAnimating = false;
 /** 开幕页点击委托：清空本地后需 abort 再重新 bind */
@@ -892,6 +916,45 @@ function renderBlessingModal(item, cellId) {
   return wrap;
 }
 
+function clearBlessingSaveBar() {
+  if (!blessingSaveBarEl) return;
+  blessingSaveBarEl.innerHTML = "";
+}
+
+/** 与底部「上一条 / 下一条」同一行：按类型展示「保存视频/音频/图片到本地」 */
+function syncBlessingSaveBar(item, cellId) {
+  if (!blessingSaveBarEl) return;
+  clearBlessingSaveBar();
+  const audioSrc = String(item.audioUrl || "").trim();
+  const videoSrc = String(item.videoUrl || "").trim();
+  const addSaveBtn = (label, url, fallbackFilename) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "blessing-nav-save-btn";
+    b.textContent = label;
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void saveMediaUrlToLocalFile(url, fallbackFilename);
+    });
+    blessingSaveBarEl.appendChild(b);
+  };
+  if (videoSrc) addSaveBtn("保存视频到本地", videoSrc, `blessing_${cellId}_video.mp4`);
+  if (audioSrc) addSaveBtn("保存音频到本地", audioSrc, `blessing_${cellId}_audio.mp3`);
+  if (!videoSrc && !audioSrc) {
+    const imgUrl = blessingImageSrc(item, cellId);
+    if (!isGridPlaceholderImageSrc(imgUrl)) {
+      addSaveBtn("保存图片到本地", imgUrl, `blessing_${cellId}_image.jpg`);
+    }
+  }
+  if (!blessingSaveBarEl.childElementCount) {
+    const empty = document.createElement("span");
+    empty.className = "blessing-nav-save-empty";
+    empty.textContent = "暂无可保存";
+    blessingSaveBarEl.appendChild(empty);
+  }
+}
+
 /** 祝福弹窗配图全屏查看：双指缩放、拖动；桌面 Ctrl+滚轮缩放 */
 const blessingImageViewerView = {
   scale: 1,
@@ -1039,6 +1102,7 @@ function initBlessingImageViewer() {
       pauseBlessingModalEmbeddedMedia();
       syncBlessingBgmWithModalEmbeddedMedia();
       closeBlessingImageViewer();
+      clearBlessingSaveBar();
     });
   }
 }
@@ -1116,8 +1180,10 @@ function openById(rawId) {
       url: fallbackGridImageUrl(),
     });
     modalBodyEl.appendChild(renderBlessingModal(placeholder, id));
+    syncBlessingSaveBar(placeholder, id);
   } else {
     modalBodyEl.appendChild(renderBlessingModal(item, id));
+    syncBlessingSaveBar(item, id);
   }
   if (!modalEl.open) modalEl.showModal();
 }
@@ -1174,6 +1240,7 @@ function openAdminAfterPasswordPrompt() {
 function syncBirthdayGateVisibility() {
   const gate = getBirthdayGateEl();
   if (!gate) {
+    document.documentElement.classList.remove(BIRTHDAY_GATE_BOOT_HTML_CLASS);
     updateExportBlessingsTextButton();
     return;
   }
@@ -1182,9 +1249,11 @@ function syncBirthdayGateVisibility() {
   if (!done) {
     gate.removeAttribute("hidden");
     gate.removeAttribute("aria-hidden");
+    document.documentElement.classList.add(BIRTHDAY_GATE_BOOT_HTML_CLASS);
   } else {
     gate.setAttribute("hidden", "");
     gate.setAttribute("aria-hidden", "true");
+    document.documentElement.classList.remove(BIRTHDAY_GATE_BOOT_HTML_CLASS);
   }
   document.body.style.overflow = done ? "" : "hidden";
   updateExportBlessingsTextButton();
@@ -1257,11 +1326,15 @@ function onBirthdayGateDelegatedClick(e) {
     const g = getBirthdayGateEl();
     const el = g && g.querySelector(".birthday-gate__candle");
     if (el) el.classList.add("is-blown");
+    /**
+     * 流程三拍：① 用户点蛋糕（含吹气/喷气）② `is-blown` 起烛火熄灭 CSS（见上常量，与样式 0.32s 对齐）
+     * ③ 熄灭时长结束后 `completeCandleCeremony` 收开屏进祝福页。中间无额外交互、也不靠 `transitionend`。
+     */
+    window.setTimeout(() => {
+      birthdayBlowAnimating = false;
+      completeCandleCeremony();
+    }, CANDLE_FLAME_EXTINGUISH_MS);
   });
-  window.setTimeout(() => {
-    birthdayBlowAnimating = false;
-    completeCandleCeremony();
-  }, 560);
 }
 
 function completeCandleCeremony() {
@@ -1273,14 +1346,9 @@ function completeCandleCeremony() {
   } catch {
     /* ignore */
   }
-  const finalize = () => {
-    const g = getBirthdayGateEl();
-    if (g) g.classList.remove("birthday-gate--out");
-    resetBirthdayGateCandles();
-    syncBirthdayGateVisibility();
-  };
-  gate.classList.add("birthday-gate--out");
-  window.setTimeout(finalize, 480);
+  gate.classList.remove("birthday-gate--out");
+  /** 勿在此处 `resetBirthdayGateCandles`：会立刻去掉 `is-blown`，用户看不到烛火熄灭过渡 */
+  syncBirthdayGateVisibility();
 }
 
 function initBirthdayGate(options = {}) {
@@ -1498,9 +1566,11 @@ async function saveMediaUrlToLocalFileViaFetch(src, fallbackFilename) {
     a.click();
     a.remove();
     URL.revokeObjectURL(obj);
+    showTimedDismissibleDialog(SAVE_SUCCESS_TIP);
   } catch {
     try {
       tryProgrammaticDownloadSync(src, fallbackFilename);
+      showTimedDismissibleDialog(SAVE_SUCCESS_TIP);
     } catch {
       alert(
         "无法保存到本地。跨域资源需对方允许跨域；也可换系统浏览器，或对音视频长按选「另存」。"
@@ -1525,6 +1595,7 @@ function saveMediaUrlToLocalFile(url, fallbackFilename) {
   }
   if (src.startsWith("data:")) {
     tryProgrammaticDownloadSync(src, fallbackFilename);
+    showTimedDismissibleDialog(SAVE_SUCCESS_TIP);
     return Promise.resolve();
   }
   if (isDownloadLikelySameOrigin(src)) {
@@ -1532,6 +1603,7 @@ function saveMediaUrlToLocalFile(url, fallbackFilename) {
       return saveMediaUrlToLocalFileViaFetch(src, fallbackFilename);
     }
     tryProgrammaticDownloadSync(src, fallbackFilename);
+    showTimedDismissibleDialog(SAVE_SUCCESS_TIP);
     return Promise.resolve();
   }
   return saveMediaUrlToLocalFileViaFetch(src, fallbackFilename);
@@ -2238,6 +2310,77 @@ function showTimedPopup(message, duration = 5000) {
     if (popup.open) popup.close();
     popup.remove();
   }, duration);
+}
+
+const SAVE_SUCCESS_TIP =
+  "已开始保存到本地。请到相册或「下载」里查看。请先点上方「关闭」按钮关掉本提示，勿按手机返回键，以免离开页面后重新从开屏开始。";
+
+/** 保存触发后：顶部高对比关闭区 + Esc，避免用户找不到关闭方式而去按系统返回 */
+function showTimedDismissibleDialog(message, durationMs = 6500) {
+  const popup = document.createElement("dialog");
+  popup.className = "save-feedback-dialog";
+  const card = document.createElement("div");
+  card.className = "save-feedback-card";
+  const head = document.createElement("div");
+  head.className = "save-feedback-head";
+  const headHint = document.createElement("span");
+  headHint.className = "save-feedback-head-hint";
+  headHint.textContent = "关闭提示";
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "save-feedback-close";
+  closeBtn.setAttribute("aria-label", "关闭提示");
+  closeBtn.setAttribute("title", "关闭");
+  const closeX = document.createElement("span");
+  closeX.className = "save-feedback-close-x";
+  closeX.setAttribute("aria-hidden", "true");
+  closeX.textContent = "×";
+  const closeTxt = document.createElement("span");
+  closeTxt.className = "save-feedback-close-txt";
+  closeTxt.textContent = "关闭";
+  closeBtn.appendChild(closeX);
+  closeBtn.appendChild(closeTxt);
+  const msg = document.createElement("p");
+  msg.className = "save-feedback-msg";
+  msg.textContent = message;
+
+  let done = false;
+  let timerId = null;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    if (timerId != null) {
+      window.clearTimeout(timerId);
+      timerId = null;
+    }
+    document.removeEventListener("keydown", onDocKey);
+    try {
+      if (popup.open) popup.close();
+    } catch {
+      /* ignore */
+    }
+    popup.remove();
+  };
+
+  const onDocKey = (e) => {
+    if (e.key === "Escape") cleanup();
+  };
+
+  closeBtn.addEventListener("click", () => cleanup());
+  document.addEventListener("keydown", onDocKey);
+  head.appendChild(headHint);
+  head.appendChild(closeBtn);
+  card.appendChild(head);
+  card.appendChild(msg);
+  popup.appendChild(card);
+  document.body.appendChild(popup);
+  try {
+    popup.showModal();
+  } catch {
+    cleanup();
+    return;
+  }
+  timerId = window.setTimeout(cleanup, durationMs);
 }
 
 function applySiteDeployRevisionGate() {

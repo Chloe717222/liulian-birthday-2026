@@ -10,6 +10,10 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!-- 一律加 boot：首屏防闪（与仪式是否完成无关）；是否显示开屏仍由 app.js 读 session 决定 -->
+    <script>
+      document.documentElement.classList.add("birthday-gate-boot");
+    </script>
     <main class="container">
       <header class="stage-width hero-header">
         <div class="hero-header__row">
@@ -39,7 +43,7 @@
           class="primary-controls__input"
           type="text"
           maxlength="4"
-          placeholder="0001-1000"
+          placeholder="请输入具体编号（0001-1000）"
           inputmode="numeric"
           autocomplete="off"
           enterkeyhint="search"
@@ -162,6 +166,7 @@
           <button id="prevBlessingBtn" type="button" class="blessing-nav-side blessing-nav-side--green">
             上一条
           </button>
+          <div id="blessingSaveBar" class="blessing-nav-save" role="group" aria-label="保存到本地"></div>
           <button id="nextBlessingBtn" type="button" class="blessing-nav-side blessing-nav-side--green">
             下一条
           </button>
